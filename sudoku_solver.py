@@ -99,8 +99,15 @@ def solve_naked_singles(grid):
  
         for (row, col), options in candidates.items():
             if len(options) == 1:
-                place_value(grid, row_missing, col_missing, box_missing, row, col, options[0])
-                placed_this_pass += 1
+                val = options[0]
+                b = box_index(row, col)
+                # Re-check against the LIVE sets, not just the snapshot the
+                # candidates dict was built from. Placing an earlier cell
+                # in this same pass may have already used up this digit
+                # in a shared row/column/box, making this entry stale.
+                if val in row_missing[row] and val in col_missing[col] and val in box_missing[b]:
+                    place_value(grid, row_missing, col_missing, box_missing, row, col, val)
+                    placed_this_pass += 1
  
         total_placed += placed_this_pass
         if placed_this_pass == 0:
@@ -109,20 +116,65 @@ def solve_naked_singles(grid):
     return total_placed, row_missing, col_missing, box_missing
  
  
+def solve(grid):
+    """
+    Solves grid in place using naked-singles propagation followed by
+    MRV-guided backtracking. Returns True if solved, False if the grid
+    (or the current branch) has no valid solution.
+ 
+    Option B design: no saved/restored tracking-set state. Every recursive
+    call rebuilds row/col/box sets and candidates directly from whatever
+    the grid looks like at that moment.
+ 
+    Bookkeeping note: naked-singles propagation can fill in several cells
+    as a side effect of a single guess. If that guess turns out wrong, all
+    of those side-effect placements have to be undone too -- not just the
+    guessed cell -- or the grid stays corrupted for the branch above. So
+    each call remembers which cells were empty when it started, and wipes
+    all of them back to empty before returning False.
+    """
+    cells_empty_on_entry = [(r, c) for r in range(9) for c in range(9) if grid[r][c] == 0]
+ 
+    solve_naked_singles(grid)
+ 
+    row_missing, col_missing, box_missing = build_tracking_sets(grid)
+    candidates = build_candidates(grid, row_missing, col_missing, box_missing)
+ 
+    # Contradiction check: an empty cell with zero valid digits means
+    # some guess (this level or higher) was wrong.
+    for options in candidates.values():
+        if len(options) == 0:
+            for row, col in cells_empty_on_entry:
+                grid[row][col] = 0  # undo naked-singles fill from this call
+            return False
+ 
+    # No empty cells left with candidates -- fully solved.
+    if not candidates:
+        return True
+ 
+    # MRV heuristic: guess on the cell with the fewest candidates first.
+    row, col = min(candidates, key=lambda cell: len(candidates[cell]))
+ 
+    for guess in candidates[(row, col)]:
+        grid[row][col] = guess
+        if solve(grid):
+            return True
+        # solve() already cleaned up anything IT filled before returning
+        # False, so grid[row][col] is empty again here -- try next guess.
+ 
+    # Every candidate for this cell failed -- undo this call's own
+    # naked-singles fill before reporting failure upward.
+    for row, col in cells_empty_on_entry:
+        grid[row][col] = 0
+    return False
+ 
+ 
 if __name__ == "__main__":
     print("Starting grid:")
     display_grid(sample_puzzle)
  
-    placed, row_missing, col_missing, box_missing = solve_naked_singles(sample_puzzle)
- 
-    print(f"\nPlaced {placed} cells via naked singles.")
-    print("Grid after naked-singles propagation:")
-    display_grid(sample_puzzle)
- 
-    remaining = build_candidates(sample_puzzle, row_missing, col_missing, box_missing)
-    if remaining:
-        print(f"\n{len(remaining)} cells still unsolved -- candidates:")
-        for (row, col), options in remaining.items():
-            print(f"  ({row},{col}): {options}")
+    if solve(sample_puzzle):
+        print("\nSolved!")
+        display_grid(sample_puzzle)
     else:
-        print("\nSolved completely with naked singles alone!")
+        print("\nNo solution exists for this puzzle.")
