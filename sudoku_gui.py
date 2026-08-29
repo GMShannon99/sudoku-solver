@@ -1,3 +1,4 @@
+
 """
 Sudoku GUI
 ==========
@@ -22,7 +23,7 @@ Two screens, shown one after another in the same window:
  
 import tkinter as tk
  
-from sudoku_solver import sample_puzzle, build_tracking_sets, solve
+from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
  
  
 class SudokuGUI:
@@ -37,10 +38,20 @@ class SudokuGUI:
         self.row_labels = []
         self.col_labels = []
  
+        self._build_title()
         self._build_grid()
         self._build_side_labels()
         self._build_buttons()
         self._update_candidates()
+ 
+    def _build_title(self):
+        """Displays the puzzle name with a name credit to its right,
+        e.g. 'Sudoku Solver - By Gil Shannon', at the top of the
+        window above the grid."""
+        title_label = tk.Label(
+            self.root, text="Sudoku Solver - By Gil Shannon", font=("Arial", 14, "bold")
+        )
+        title_label.grid(row=0, column=0, pady=(10, 0))
  
     def _build_grid(self):
         """Creates the 9x9 grid of Entry widgets, PLUS a 10th column
@@ -51,7 +62,7 @@ class SudokuGUI:
         an earlier version of this file did) left their spacing
         unrelated to the grid's spacing, so they drifted out of line."""
         self.grid_frame = tk.Frame(self.root)
-        self.grid_frame.grid(row=0, column=0, padx=10, pady=10)
+        self.grid_frame.grid(row=1, column=0, padx=10, pady=10)
  
         for r in range(9):
             for c in range(9):
@@ -110,7 +121,7 @@ class SudokuGUI:
  
     def _build_buttons(self):
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=1, column=0, pady=10)
+        button_frame.grid(row=2, column=0, pady=10)
  
         tk.Button(button_frame, text="Solve", command=self._on_solve).grid(
             row=0, column=0, padx=5
@@ -120,7 +131,7 @@ class SudokuGUI:
         )
  
         self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
-        self.status_label.grid(row=2, column=0)
+        self.status_label.grid(row=3, column=0)
  
     def _read_grid(self):
         """Reads the current state of every Entry widget into a plain
@@ -135,10 +146,21 @@ class SudokuGUI:
         return grid
  
     def _on_cell_edit(self, row, col):
-        """Runs on every keystroke in an editable cell: keeps only the
-        most recently typed valid digit (so typing a second character
-        replaces rather than appends), then refreshes the candidate
-        display for the whole board."""
+        """
+        Runs on every keystroke in an editable cell. First narrows
+        whatever was typed down to a single candidate digit (same as
+        before), then VALIDATES that digit before allowing it to stay:
+        it must not already be used anywhere else in this cell's row,
+        column, or 3x3 box. An invalid digit is rejected outright --
+        the cell is left blank and the system beeps -- rather than
+        being accepted and left for the person to notice later.
+ 
+        Note this is deliberately stricter than just "matches a
+        candidate digit for this cell": it directly checks the row,
+        column, and box conditions the person described, which in
+        practice is the same check build_candidates() already performs
+        (a digit is only ever a candidate if it clears all three).
+        """
         entry = self.entries[(row, col)]
         text = entry.get()
  
@@ -146,6 +168,26 @@ class SudokuGUI:
             text = text[-1]
         if text and text not in "123456789":
             text = ""
+ 
+        if text:
+            digit = int(text)
+ 
+            # Validate against the REST of the grid, with this cell
+            # treated as empty -- we're deciding whether to place a
+            # NEW digit here, so this cell's own old value (if any)
+            # shouldn't count against the new one.
+            grid = self._read_grid()
+            grid[row][col] = 0
+            row_missing, col_missing, box_missing = build_tracking_sets(grid)
+            box = box_index(row, col)
+ 
+            row_ok = digit in row_missing[row]
+            col_ok = digit in col_missing[col]
+            box_ok = digit in box_missing[box]
+ 
+            if not (row_ok and col_ok and box_ok):
+                self.root.bell()  # audible beep on rejection
+                text = ""  # reject -- leave the cell blank
  
         entry.delete(0, tk.END)
         if text:
@@ -223,15 +265,25 @@ class PuzzleEntryGUI:
         self.entries = {}
         self.result = None  # set once the person clicks a button below
  
+        self._build_title()
         self._build_grid()
         self._build_buttons()
+ 
+    def _build_title(self):
+        """Displays the puzzle name with a name credit to its right,
+        e.g. 'Enter Your Puzzle - By Gil Shannon', at the top of the
+        window above the grid."""
+        title_label = tk.Label(
+            self.root, text="Enter Your Puzzle - By Gil Shannon", font=("Arial", 14, "bold")
+        )
+        title_label.grid(row=0, column=0, pady=(10, 0))
  
     def _build_grid(self):
         """Same 9x9 layout and 3x3 box-divider spacing as SudokuGUI's
         grid, but every cell is editable from the start -- nothing is
         locked, since there are no "givens" yet."""
         self.grid_frame = tk.Frame(self.root)
-        self.grid_frame.grid(row=0, column=0, padx=10, pady=10)
+        self.grid_frame.grid(row=1, column=0, padx=10, pady=10)
  
         for r in range(9):
             for c in range(9):
@@ -250,7 +302,7 @@ class PuzzleEntryGUI:
  
     def _build_buttons(self):
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=1, column=0, pady=10)
+        button_frame.grid(row=2, column=0, pady=10)
  
         tk.Button(button_frame, text="Start Solving", command=self._on_start).grid(
             row=0, column=0, padx=5
@@ -264,7 +316,7 @@ class PuzzleEntryGUI:
             text="Type a digit into any square you want filled -- leave the rest blank.",
             font=("Arial", 10),
         )
-        self.hint_label.grid(row=2, column=0)
+        self.hint_label.grid(row=3, column=0)
  
     def _on_cell_edit(self, row, col):
         """Same single-digit-only enforcement as the main solving grid:
