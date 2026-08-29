@@ -450,3 +450,4 @@ if __name__ == "__main__":
         display_grid(sample_puzzle_grid)
     else:
         print("\nNo solution exists for this puzzle.")
+        
