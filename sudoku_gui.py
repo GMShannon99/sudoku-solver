@@ -2,19 +2,22 @@
 Sudoku GUI
 ==========
  
-A tkinter window showing the 9x9 grid as editable cells. Original
-puzzle "givens" are locked and shown in a different color; empty
-cells can be typed into directly as guesses.
+Two screens, shown one after another in the same window:
  
-To the right of each row and below each column, this displays the
-digits still missing from that row/column -- a live version of the
-row/column tracking sets from sudoku_solver.py's build_tracking_sets().
-These update automatically every time you type a digit anywhere on
-the board.
+1. PuzzleEntryGUI -- a blank 9x9 grid. Type your puzzle's clues
+   directly into the squares you want filled; leave every other
+   square blank (no need to type 0 anywhere). A "Use Sample Puzzle"
+   button skips straight to the built-in sample_puzzle instead.
  
-A "Solve" button runs the full solver (naked singles + backtracking)
-and fills in everything beyond what you've entered. A "Reset" button
-clears your guesses back to the original puzzle.
+2. SudokuGUI -- the solving screen. Whatever puzzle came out of
+   screen 1 appears here with those clues locked (shown in a
+   different color) and every other cell open for your own guesses.
+   To the right of each row and below each column, this displays the
+   digits still missing from that row/column -- a live version of the
+   row/column tracking sets from sudoku_solver.py's build_tracking_sets().
+   A "Solve" button runs the full solver (naked singles + backtracking)
+   and fills in everything beyond what you've entered. A "Reset"
+   button clears your guesses back to the original puzzle's clues.
 """
  
 import tkinter as tk
@@ -200,10 +203,140 @@ class SudokuGUI:
         self._update_candidates()
  
  
+class PuzzleEntryGUI:
+    """
+    A full-window screen that looks and behaves like the main solving
+    grid (SudokuGUI above), but every cell starts blank and editable --
+    there's no "given vs. guess" distinction yet, because the puzzle
+    itself hasn't been defined. The person types their clues directly
+    into the squares they want filled and leaves the rest blank (no
+    need to type 0 anywhere).
+ 
+    This mirrors the terminal version's get_puzzle_from_terminal() in
+    purpose -- get a validated starting puzzle, with a shortcut to
+    skip straight to sample_puzzle -- just via clicking into a grid
+    instead of typing text rows.
+    """
+ 
+    def __init__(self, root):
+        self.root = root
+        self.entries = {}
+        self.result = None  # set once the person clicks a button below
+ 
+        self._build_grid()
+        self._build_buttons()
+ 
+    def _build_grid(self):
+        """Same 9x9 layout and 3x3 box-divider spacing as SudokuGUI's
+        grid, but every cell is editable from the start -- nothing is
+        locked, since there are no "givens" yet."""
+        self.grid_frame = tk.Frame(self.root)
+        self.grid_frame.grid(row=0, column=0, padx=10, pady=10)
+ 
+        for r in range(9):
+            for c in range(9):
+                padx = (8 if c % 3 == 0 and c != 0 else 1, 1)
+                pady = (8 if r % 3 == 0 and r != 0 else 1, 1)
+ 
+                entry = tk.Entry(
+                    self.grid_frame, width=2, font=("Arial", 18), justify="center"
+                )
+                entry.grid(row=r, column=c, padx=padx, pady=pady)
+                entry.bind(
+                    "<KeyRelease>",
+                    lambda event, row=r, col=c: self._on_cell_edit(row, col),
+                )
+                self.entries[(r, c)] = entry
+ 
+    def _build_buttons(self):
+        button_frame = tk.Frame(self.root)
+        button_frame.grid(row=1, column=0, pady=10)
+ 
+        tk.Button(button_frame, text="Start Solving", command=self._on_start).grid(
+            row=0, column=0, padx=5
+        )
+        tk.Button(
+            button_frame, text="Use Sample Puzzle", command=self._on_sample
+        ).grid(row=0, column=1, padx=5)
+ 
+        self.hint_label = tk.Label(
+            self.root,
+            text="Type a digit into any square you want filled -- leave the rest blank.",
+            font=("Arial", 10),
+        )
+        self.hint_label.grid(row=2, column=0)
+ 
+    def _on_cell_edit(self, row, col):
+        """Same single-digit-only enforcement as the main solving grid:
+        keeps only the most recently typed valid digit 1-9. No 0's are
+        ever allowed to sit in a cell here -- blank IS the "no clue"
+        state, exactly as requested."""
+        entry = self.entries[(row, col)]
+        text = entry.get()
+ 
+        if len(text) > 1:
+            text = text[-1]
+        if text and text not in "123456789":
+            text = ""
+ 
+        entry.delete(0, tk.END)
+        if text:
+            entry.insert(0, text)
+ 
+    def _read_grid(self):
+        """Reads the current state of every cell into a plain 9x9 grid.
+        A blank cell becomes 0 (the "no clue" placeholder every solving
+        function in sudoku_solver.py expects) -- the person never has
+        to type 0 themselves."""
+        grid = [[0] * 9 for _ in range(9)]
+        for (r, c), entry in self.entries.items():
+            text = entry.get().strip()
+            if len(text) == 1 and text in "123456789":
+                grid[r][c] = int(text)
+        return grid
+ 
+    def _on_start(self):
+        self.result = self._read_grid()
+        self.root.quit()  # ends THIS mainloop() call; window stays open
+ 
+    def _on_sample(self):
+        # A shallow copy per row, so editing this grid later never
+        # touches the original sample_puzzle constant.
+        self.result = [row[:] for row in sample_puzzle]
+        self.root.quit()
+ 
+    def on_window_closed(self):
+        """Called if the person closes the window directly (the X
+        button) instead of clicking a button. Leaves result as None so
+        main() knows to exit quietly rather than launch the solver."""
+        self.result = None
+        self.root.quit()
+ 
+ 
 def main():
     root = tk.Tk()
+    root.title("Enter Your Puzzle")
+ 
+    entry_screen = PuzzleEntryGUI(root)
+    # Override the window's own close button so it stops the mainloop
+    # cleanly (via quit()) instead of destroying the window outright --
+    # this lets us safely check entry_screen.result afterward.
+    root.protocol("WM_DELETE_WINDOW", entry_screen.on_window_closed)
+    root.mainloop()
+ 
+    puzzle = entry_screen.result
+    if puzzle is None:
+        root.destroy()
+        return
+ 
+    # Clear the entry screen's widgets and rebuild the same window as
+    # the main solving grid -- reusing one window keeps this feeling
+    # like a single continuous app rather than two separate popups.
+    for widget in root.winfo_children():
+        widget.destroy()
+ 
     root.title("Sudoku Solver")
-    SudokuGUI(root, sample_puzzle)
+    SudokuGUI(root, puzzle)
     root.mainloop()
  
  
