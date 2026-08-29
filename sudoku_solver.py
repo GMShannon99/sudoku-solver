@@ -361,12 +361,92 @@ def solve(grid):
     return False
  
  
-if __name__ == "__main__":
-    print("Starting grid:")
-    display_grid(sample_puzzle)
+def parse_puzzle_rows(rows):
+    """
+    Converts a list of 9 raw text rows into a 9x9 grid of integers.
  
-    if solve(sample_puzzle):
+    Accepts either format per row:
+      "530070000"          (9 characters, no spaces)
+      "5 3 0 0 7 0 0 0 0"  (9 characters separated by spaces)
+    Blank cells can be written as either '0' or '.'.
+ 
+    Raises ValueError with a clear message if a row doesn't contain
+    exactly 9 valid characters, or if there aren't exactly 9 rows.
+    This lets the caller catch the error and re-prompt instead of
+    crashing the program on bad input.
+    """
+    if len(rows) != 9:
+        raise ValueError(f"Expected 9 rows, got {len(rows)}.")
+ 
+    grid = []
+    for row_num, raw_line in enumerate(rows):
+        # Strip spaces so both "530070000" and "5 3 0 0 7 0 0 0 0" work.
+        cleaned = raw_line.replace(" ", "")
+ 
+        if len(cleaned) != 9:
+            raise ValueError(
+                f"Row {row_num + 1} has {len(cleaned)} values, expected 9: '{raw_line}'"
+            )
+ 
+        row = []
+        for ch in cleaned:
+            if ch in ("0", "."):
+                row.append(0)
+            elif ch in "123456789":
+                row.append(int(ch))
+            else:
+                raise ValueError(
+                    f"Row {row_num + 1} has an invalid character '{ch}' -- "
+                    f"only digits 1-9, '0', and '.' are allowed: '{raw_line}'"
+                )
+        grid.append(row)
+ 
+    return grid
+ 
+ 
+def get_puzzle_from_terminal():
+    """
+    Prompts the person to type in a puzzle, 9 rows at a time, and
+    returns a validated 9x9 grid. Keeps re-prompting on bad input
+    rather than crashing, and offers a shortcut to load the built-in
+    sample_puzzle instead of typing one out.
+ 
+    Returns the parsed grid (a list of 9 lists of 9 ints).
+    """
+    print("Enter your Sudoku puzzle, one row at a time (9 rows total).")
+    print("Use 0 or . for blank cells, e.g.:  530070000  or  5 3 0 0 7 0 0 0 0")
+    print("Or just press Enter on the first row to use the built-in sample puzzle.")
+    print()
+ 
+    while True:
+        rows = []
+        first_line = input("Row 1: ")
+ 
+        if first_line.strip() == "":
+            print("\nUsing built-in sample puzzle.")
+            # A deep-ish copy so edits made while solving never touch
+            # the original sample_puzzle constant defined above.
+            return [row[:] for row in sample_puzzle]
+ 
+        rows.append(first_line)
+        for i in range(2, 10):
+            rows.append(input(f"Row {i}: "))
+ 
+        try:
+            return parse_puzzle_rows(rows)
+        except ValueError as err:
+            print(f"\nThat puzzle couldn't be read: {err}")
+            print("Let's try again from the top.\n")
+ 
+ 
+if __name__ == "__main__":
+    sample_puzzle_grid = get_puzzle_from_terminal()
+ 
+    print("\nStarting grid:")
+    display_grid(sample_puzzle_grid)
+ 
+    if solve(sample_puzzle_grid):
         print("\nSolved!")
-        display_grid(sample_puzzle)
+        display_grid(sample_puzzle_grid)
     else:
         print("\nNo solution exists for this puzzle.")
