@@ -1,4 +1,3 @@
-
 """
 Sudoku GUI
 ==========
@@ -37,6 +36,8 @@ class SudokuGUI:
         self.entries = {}
         self.row_labels = []
         self.col_labels = []
+        self.backup_stack = []  # each entry: a full 9x9 grid snapshot,
+                                 # saved via the Save button, most recent last
  
         self._build_title()
         self._build_grid()
@@ -123,15 +124,21 @@ class SudokuGUI:
         button_frame = tk.Frame(self.root)
         button_frame.grid(row=2, column=0, pady=10)
  
-        tk.Button(button_frame, text="Solve", command=self._on_solve).grid(
+        tk.Button(button_frame, text="Save", command=self._on_save).grid(
             row=0, column=0, padx=5
         )
-        tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
+        tk.Button(button_frame, text="Solve", command=self._on_solve).grid(
             row=0, column=1, padx=5
+        )
+        tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
+            row=0, column=2, padx=5
         )
  
         self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
         self.status_label.grid(row=3, column=0)
+ 
+        self.backup_label = tk.Label(self.root, text="", font=("Arial", 10))
+        self.backup_label.grid(row=4, column=0)
  
     def _read_grid(self):
         """Reads the current state of every Entry widget into a plain
@@ -211,6 +218,42 @@ class SudokuGUI:
             digits = "\n".join(str(d) for d in sorted(col_missing[c]))
             self.col_labels[c].config(text=digits if digits else "\u2713")
  
+    def _on_save(self):
+        """
+        Saves a snapshot of the current grid (givens + guesses so far)
+        onto the backup stack, then updates the on-screen message to
+        show how many backups now exist. Each save is independent --
+        saving again later adds ANOTHER snapshot on top, it doesn't
+        replace the previous one.
+        """
+        grid = self._read_grid()
+        self.backup_stack.append(grid)
+        self._update_backup_label()
+ 
+    def _update_backup_label(self):
+        """Refreshes the '<N> screen backup(s)' message to match
+        however many snapshots are currently on the stack."""
+        count = len(self.backup_stack)
+        if count == 0:
+            self.backup_label.config(text="")
+        elif count == 1:
+            self.backup_label.config(text="1 screen backup")
+        else:
+            self.backup_label.config(text=f"{count} screen backups")
+ 
+    def _apply_grid_to_entries(self, grid):
+        """Writes a full 9x9 grid into the on-screen entry cells,
+        leaving the locked given cells untouched (they never change
+        after the puzzle is loaded) and only updating the editable
+        guess cells."""
+        for (r, c), entry in self.entries.items():
+            if (r, c) not in self.given_cells:
+                entry.config(state="normal")
+                entry.delete(0, tk.END)
+                val = grid[r][c]
+                if val != 0:
+                    entry.insert(0, str(val))
+ 
     def _on_solve(self):
         """Runs the full solver on the current grid (givens + any
         guesses typed in) and fills every remaining cell with the
@@ -234,14 +277,31 @@ class SudokuGUI:
         self._update_candidates()
  
     def _on_reset(self):
-        """Clears every guessed cell back to empty, leaving only the
-        original puzzle givens."""
-        for (r, c), entry in self.entries.items():
-            if (r, c) not in self.given_cells:
-                entry.config(state="normal")
-                entry.delete(0, tk.END)
+        """
+        Restores the grid to the MOST RECENTLY saved backup, removing
+        that backup from the stack and decrementing the on-screen
+        backup count by 1. If no backups have been saved yet, there's
+        nothing to restore TO, so this falls back to the original
+        behavior: clearing every guess back to just the puzzle's
+        original givens.
+        """
+        if self.backup_stack:
+            grid = self.backup_stack.pop()
+            self._apply_grid_to_entries(grid)
+            self._update_backup_label()
+            self.status_label.config(text="Restored last saved backup.", fg="blue")
+        else:
+            # Nothing saved -- fall back to clearing to the puzzle's
+            # original givens, same as this button did before backups
+            # existed.
+            for (r, c), entry in self.entries.items():
+                if (r, c) not in self.given_cells:
+                    entry.config(state="normal")
+                    entry.delete(0, tk.END)
+            self.status_label.config(
+                text="No backups saved -- cleared to puzzle.", fg="red"
+            )
  
-        self.status_label.config(text="")
         self._update_candidates()
  
  
