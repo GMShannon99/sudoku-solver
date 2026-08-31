@@ -26,6 +26,8 @@ from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
 
 __version__ = "1.2.0"
 
+ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
+
 HELP_TEXT = """\
 HOW THIS APP WORKS
 
@@ -229,7 +231,9 @@ class SudokuGUI:
             button_frame, text="New/Clear", command=self._on_new_clear
         ).grid(row=0, column=4, padx=5)
 
-        self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
+        self.status_label = tk.Label(
+            self.root, text=ENTRY_HINT_TEXT, font=("Arial", 10)
+        )
         self.status_label.grid(row=3, column=0)
  
         self.backup_label = tk.Label(self.root, text="", font=("Arial", 10))
@@ -281,12 +285,16 @@ class SudokuGUI:
         """
         entry = self.entries[(row, col)]
         text = entry.get()
- 
+
         if len(text) > 1:
             text = text[-1]
         if text and text not in "123456789":
             text = ""
- 
+
+        # A leftover red status message (e.g. "No solution exists...")
+        # shouldn't linger once the person starts typing again.
+        self.status_label.config(text=ENTRY_HINT_TEXT, fg="black")
+
         if text:
             digit = int(text)
 
@@ -624,7 +632,7 @@ class PuzzleEntryGUI:
  
         self.hint_label = tk.Label(
             self.root,
-            text="Type a digit into any square you want filled -- leave the rest blank.",
+            text=ENTRY_HINT_TEXT,
             font=("Arial", 10),
         )
         self.hint_label.grid(row=3, column=0)
