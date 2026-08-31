@@ -21,10 +21,80 @@ Two screens, shown one after another in the same window:
 """
  
 import tkinter as tk
- 
+from tkinter import messagebox
 from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
- 
- 
+
+__version__ = "1.2.0"
+
+HELP_TEXT = """\
+HOW THIS APP WORKS
+
+STARTING FROM A BLANK GRID
+When the grid is blank -- either the first time the app opens, or
+right after clicking "New/Clear" -- you're on the puzzle entry
+screen. Type a digit into every square you want as a starting
+clue and leave every other square blank (no need to type 0
+anywhere). Then either:
+  * Click "Start Solving" to lock in whatever you typed as the
+    puzzle's givens and move to the solving screen, or
+  * Click "Use Sample Puzzle" to skip straight to the built-in
+    sample puzzle instead, ignoring anything you typed.
+
+SELECTING A CELL
+Click on any empty (white) cell to select it. The cell turns
+yellow to show it's selected, and a set of candidate-digit
+buttons appears in the lower-right corner of the window.
+
+CANDIDATE BUTTONS
+The candidate buttons show every digit that could legally go in
+the cell you just selected -- that is, every digit 1-9 that
+isn't already used elsewhere in that cell's row, column, or 3x3
+box. Click one of these buttons to fill the selected cell with
+that digit.
+
+TYPING DIRECTLY
+You don't have to use the candidate buttons -- you can also just
+type a digit straight into a cell. It's checked with the exact
+same rule as the candidate buttons (must be missing from the
+cell's row, column, and box). If you type a digit that would
+break that rule, it's rejected: the cell stays blank and the
+computer beeps to let you know.
+
+ROW NUMBERS (RIGHT SIDE)
+The numbers shown to the right of each row list every digit
+still missing from that row. As you fill in cells, digits drop
+out of this list. A row that's completely and correctly filled
+shows "done".
+
+COLUMN NUMBERS (BELOW EACH COLUMN)
+The numbers shown below each column work the same way, but for
+that column: every digit still missing from it, updating live as
+you play. A fully and correctly filled column shows a checkmark.
+
+GIVEN CLUES VS. YOUR ENTRIES
+The puzzle's starting clues are shown in gray and cannot be
+changed -- these are the numbers the puzzle began with. Every
+other cell is yours to fill in and stays editable until the
+puzzle is solved.
+
+THE BUTTONS
+  Save      -- Takes a snapshot backup of the grid exactly as it
+               looks right now (givens plus whatever you've typed
+               in so far). You can save as many times as you like;
+               each Save adds another backup.
+  Solve     -- Runs the full solver and fills in every remaining
+               empty cell to complete the puzzle.
+  Reset     -- Restores the most recently saved backup. If you've
+               never clicked Save, this instead clears the grid
+               back to the original puzzle's clues.
+  Help      -- Opens this help window.
+  New/Clear -- After asking you to confirm, discards the current
+               puzzle and every saved backup and takes you back to
+               the blank puzzle entry screen described above, so
+               you can start over with a brand new puzzle.
+"""
+
+
 class SudokuGUI:
     def __init__(self, root, puzzle):
         self.root = root
@@ -38,11 +108,19 @@ class SudokuGUI:
         self.col_labels = []
         self.backup_stack = []  # each entry: a full 9x9 grid snapshot,
                                  # saved via the Save button, most recent last
- 
+        self.selected_cell = None  # (row, col) of the cell currently
+                                    # highlighted for candidate-picking, or
+                                    # None if nothing is selected
+        self.candidate_buttons = []  # the small digit Button widgets
+                                      # currently shown for selected_cell
+        self.default_entry_bg = None  # captured from the first editable
+                                       # Entry, used to un-highlight cells
+
         self._build_title()
         self._build_grid()
         self._build_side_labels()
         self._build_buttons()
+        self._build_candidate_area()
         self._update_candidates()
  
     def _build_title(self):
@@ -50,7 +128,7 @@ class SudokuGUI:
         e.g. 'Sudoku Solver - By Gil Shannon', at the top of the
         window above the grid."""
         title_label = tk.Label(
-            self.root, text="Sudoku Solver - By Gil Shannon", font=("Arial", 14, "bold")
+            self.root, text=f"Sudoku Solver v{__version__} - By Gil Shannon", font=("Arial", 14, "bold")
         )
         title_label.grid(row=0, column=0, pady=(10, 0))
  
@@ -94,6 +172,17 @@ class SudokuGUI:
                         "<KeyRelease>",
                         lambda event, row=r, col=c: self._on_cell_edit(row, col),
                     )
+                    # Click-to-see-candidates: <Button-1> fires on every
+                    # click regardless of whether the cell already has
+                    # focus, unlike <FocusIn> (which only fires the first
+                    # time), so re-clicking an already-focused cell still
+                    # re-shows its candidates.
+                    entry.bind(
+                        "<Button-1>",
+                        lambda event, row=r, col=c: self._on_cell_click(row, col),
+                    )
+                    if self.default_entry_bg is None:
+                        self.default_entry_bg = entry.cget("bg")
  
                 self.entries[(r, c)] = entry
  
@@ -133,13 +222,35 @@ class SudokuGUI:
         tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
             row=0, column=2, padx=5
         )
- 
+        tk.Button(button_frame, text="Help", command=self._on_help).grid(
+            row=0, column=3, padx=5
+        )
+        tk.Button(
+            button_frame, text="New/Clear", command=self._on_new_clear
+        ).grid(row=0, column=4, padx=5)
+
         self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
         self.status_label.grid(row=3, column=0)
  
         self.backup_label = tk.Label(self.root, text="", font=("Arial", 10))
         self.backup_label.grid(row=4, column=0)
- 
+
+    def _build_candidate_area(self):
+        """
+        A scratch area in the lower right of the WINDOW (not the grid)
+        for "click a cell, see its candidates" mode: candidate-digit
+        buttons for whichever cell is currently selected get drawn here.
+        It lives in its own column of root's grid, spanning the same
+        rows as the grid/buttons/status/backup area and bottom-aligned,
+        so it never overlaps the row/column missing-digit labels (those
+        live inside grid_frame itself, in grid_frame's own column 9 /
+        row 9).
+        """
+        self.candidate_frame = tk.Frame(self.root)
+        self.candidate_frame.grid(
+            row=1, column=1, rowspan=4, sticky="se", padx=10, pady=10
+        )
+
     def _read_grid(self):
         """Reads the current state of every Entry widget into a plain
         9x9 list-of-lists grid, exactly the format sudoku_solver.py's
@@ -178,30 +289,111 @@ class SudokuGUI:
  
         if text:
             digit = int(text)
- 
+
             # Validate against the REST of the grid, with this cell
             # treated as empty -- we're deciding whether to place a
             # NEW digit here, so this cell's own old value (if any)
-            # shouldn't count against the new one.
-            grid = self._read_grid()
-            grid[row][col] = 0
-            row_missing, col_missing, box_missing = build_tracking_sets(grid)
-            box = box_index(row, col)
- 
-            row_ok = digit in row_missing[row]
-            col_ok = digit in col_missing[col]
-            box_ok = digit in box_missing[box]
- 
-            if not (row_ok and col_ok and box_ok):
+            # shouldn't count against the new one. Same candidate
+            # computation used by the click-a-candidate-button path, so
+            # the two can't drift out of sync with each other.
+            if digit not in self._valid_candidates(row, col):
                 self.root.bell()  # audible beep on rejection
                 text = ""  # reject -- leave the cell blank
- 
+
         entry.delete(0, tk.END)
         if text:
             entry.insert(0, text)
- 
+            # A digit actually landed -- same end state as picking it
+            # from the candidate buttons: drop the highlight and clear
+            # whatever candidate buttons were on screen.
+            self._clear_selection()
+
         self._update_candidates()
- 
+
+    def _valid_candidates(self, row, col):
+        """
+        The single source of truth for "what digits could legally go in
+        this specific empty cell right now": digits missing from its
+        row AND its column AND its box, with the cell itself treated as
+        empty. Both _on_cell_edit() (typing) and the candidate buttons
+        built by _show_candidates() (clicking) call this, so the two
+        input paths can never disagree about what's valid.
+        """
+        grid = self._read_grid()
+        grid[row][col] = 0
+        row_missing, col_missing, box_missing = build_tracking_sets(grid)
+        box = box_index(row, col)
+        return sorted(row_missing[row] & col_missing[col] & box_missing[box])
+
+    def _on_cell_click(self, row, col):
+        """
+        Click handler for editable cells only (given cells never get
+        this binding -- see _build_grid). Selects this cell: highlights
+        it yellow and shows its candidate buttons. Clicking a different
+        cell than the one already selected clears the old selection
+        first, so only one cell is ever highlighted/showing candidates
+        at a time; re-clicking the same cell is a no-op.
+        """
+        if self.selected_cell == (row, col):
+            return
+
+        self._clear_selection()
+        self.selected_cell = (row, col)
+        self.entries[(row, col)].config(bg="yellow")
+        self._show_candidates(row, col)
+
+    def _show_candidates(self, row, col):
+        """Destroys any previously-shown candidate buttons and draws a
+        fresh small Button per valid candidate digit for (row, col) in
+        the lower-right candidate_frame."""
+        self._clear_candidate_buttons()
+        for i, digit in enumerate(self._valid_candidates(row, col)):
+            btn = tk.Button(
+                self.candidate_frame,
+                text=str(digit),
+                width=2,
+                font=("Arial", 12),
+                bg="yellow",
+                activebackground="yellow",
+                command=lambda d=digit: self._on_candidate_click(d),
+            )
+            btn.grid(row=i // 3, column=i % 3, padx=2, pady=2)
+            self.candidate_buttons.append(btn)
+
+    def _on_candidate_click(self, digit):
+        """
+        Fills the selected cell with the clicked candidate digit --
+        same as if it had been typed -- then converges on the same end
+        state typing does: highlight removed, candidate buttons
+        cleared, side labels refreshed via _update_candidates().
+        """
+        if self.selected_cell is None:
+            return
+
+        row, col = self.selected_cell
+        entry = self.entries[(row, col)]
+        entry.delete(0, tk.END)
+        entry.insert(0, str(digit))
+
+        self._clear_selection()
+        self._update_candidates()
+
+    def _clear_selection(self):
+        """Un-highlights the currently selected cell (if any) and
+        clears its candidate buttons. Safe to call when nothing is
+        selected."""
+        if self.selected_cell is not None:
+            self.entries[self.selected_cell].config(bg=self.default_entry_bg)
+            self.selected_cell = None
+        self._clear_candidate_buttons()
+
+    def _clear_candidate_buttons(self):
+        """Destroys every candidate Button currently on screen, so they
+        never pile up when a different cell gets selected."""
+        for btn in self.candidate_buttons:
+            btn.destroy()
+        self.candidate_buttons = []
+
     def _update_candidates(self):
         """Recomputes row/column missing-digit sets from the CURRENT
         grid (givens + whatever guesses are typed in so far) and
@@ -259,6 +451,7 @@ class SudokuGUI:
         guesses typed in) and fills every remaining cell with the
         result. Guessed cells that turn out inconsistent with the
         given puzzle will simply be overwritten by the solver."""
+        self._clear_selection()
         grid = self._read_grid()
  
         if solve(grid):
@@ -285,6 +478,7 @@ class SudokuGUI:
         behavior: clearing every guess back to just the puzzle's
         original givens.
         """
+        self._clear_selection()
         if self.backup_stack:
             grid = self.backup_stack.pop()
             self._apply_grid_to_entries(grid)
@@ -303,8 +497,65 @@ class SudokuGUI:
             )
  
         self._update_candidates()
- 
- 
+
+    def _on_help(self):
+        """
+        Opens a separate, non-modal Toplevel window with a plain-language
+        explanation of how the app works. Toplevel (rather than reusing
+        root) means this window has its own lifecycle -- closing it via
+        its Close button or its own X button just destroys that window,
+        leaving the main solving window and its state completely
+        untouched and still interactive.
+        """
+        doc_window = tk.Toplevel(self.root)
+        doc_window.title("How This App Works")
+        doc_window.geometry("560x600")
+
+        text_widget = tk.Text(
+            doc_window, wrap="word", font=("Arial", 11), padx=12, pady=12
+        )
+        text_widget.grid(row=0, column=0, sticky="nsew")
+        doc_window.grid_rowconfigure(0, weight=1)
+        doc_window.grid_columnconfigure(0, weight=1)
+
+        scrollbar = tk.Scrollbar(doc_window, command=text_widget.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        text_widget.config(yscrollcommand=scrollbar.set)
+
+        text_widget.insert("1.0", HELP_TEXT)
+        text_widget.config(state="disabled")
+
+        tk.Button(doc_window, text="Close", command=doc_window.destroy).grid(
+            row=1, column=0, columnspan=2, pady=8
+        )
+
+    def _on_new_clear(self):
+        """
+        Handles the "New/Clear" button. Since this throws away the
+        current puzzle AND every saved backup, it first asks for
+        confirmation; only a "Yes" answer proceeds. Once confirmed, it
+        tears down this solving screen and rebuilds the blank
+        PuzzleEntryGUI screen in the same window -- the exact same
+        transition main() drives the first time the app starts (see
+        _run_puzzle_entry_screen()).
+        """
+        confirmed = messagebox.askyesno(
+            "Start a New Puzzle?",
+            "This will discard the current puzzle and all saved "
+            "backups. Are you sure you want to continue?",
+        )
+        if not confirmed:
+            return
+
+        puzzle = _run_puzzle_entry_screen(self.root)
+        if puzzle is None:
+            self.root.destroy()
+            return
+
+        self.root.title("Sudoku Solver")
+        SudokuGUI(self.root, puzzle)
+
+
 class PuzzleEntryGUI:
     """
     A full-window screen that looks and behaves like the main solving
@@ -425,28 +676,40 @@ class PuzzleEntryGUI:
         self.root.quit()
  
  
-def main():
-    root = tk.Tk()
+def _run_puzzle_entry_screen(root):
+    """
+    Clears whatever is currently in the window and shows the blank
+    PuzzleEntryGUI screen, then blocks (via a nested mainloop) until
+    the person clicks "Start Solving", clicks "Use Sample Puzzle", or
+    closes the window. Returns the puzzle grid they picked, or None if
+    they closed the window without picking one.
+
+    Pulled out of main() so SudokuGUI's "New/Clear" button can drive
+    the exact same entry-screen transition main() uses on first
+    startup, without duplicating it.
+    """
+    for widget in root.winfo_children():
+        widget.destroy()
+
     root.title("Enter Your Puzzle")
- 
     entry_screen = PuzzleEntryGUI(root)
     # Override the window's own close button so it stops the mainloop
     # cleanly (via quit()) instead of destroying the window outright --
     # this lets us safely check entry_screen.result afterward.
     root.protocol("WM_DELETE_WINDOW", entry_screen.on_window_closed)
     root.mainloop()
- 
-    puzzle = entry_screen.result
+
+    return entry_screen.result
+
+
+def main():
+    root = tk.Tk()
+
+    puzzle = _run_puzzle_entry_screen(root)
     if puzzle is None:
         root.destroy()
         return
- 
-    # Clear the entry screen's widgets and rebuild the same window as
-    # the main solving grid -- reusing one window keeps this feeling
-    # like a single continuous app rather than two separate popups.
-    for widget in root.winfo_children():
-        widget.destroy()
- 
+
     root.title("Sudoku Solver")
     SudokuGUI(root, puzzle)
     root.mainloop()
