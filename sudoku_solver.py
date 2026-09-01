@@ -230,10 +230,18 @@ def solve_naked_singles(grid):
 def solve(grid):
     """
     Fully solves grid in place, combining naked-singles propagation
-    with MRV-guided recursive backtracking. Returns True if a solution
-    was found (grid now holds it), or False if no solution exists for
-    the current state of grid.
- 
+    with MRV-guided recursive backtracking. Returns a tuple
+    (solved, iteration_count):
+      solved          -- True if a solution was found (grid now holds
+                          it), or False if no solution exists for the
+                          current state of grid.
+      iteration_count -- how many guesses the MRV backtracking step
+                          (below) attempted across this whole call
+                          tree, counting failed branches too. Naked
+                          singles never increment this -- they require
+                          no guessing -- so a puzzle solvable by naked
+                          singles alone always reports 0.
+
     --- High-level recursive strategy ---
  
     Each call to solve() represents "try to finish solving the puzzle
@@ -323,27 +331,35 @@ def solve(grid):
         if len(options) == 0:
             for row, col in cells_empty_on_entry:
                 grid[row][col] = 0  # undo this call's naked-singles fill
-            return False
+            return False, 0
  
     # No empty cells remain with candidates -- meaning no empty cells
     # remain at all. The puzzle is fully and correctly solved.
     if not candidates:
-        return True
+        return True, 0
  
     # Step 3: naked singles alone wasn't enough -- time to guess.
     # MRV heuristic: always guess on the cell with the FEWEST remaining
     # candidates. Fewer options means less wasted work if this guess
     # turns out wrong, since we'll detect the contradiction sooner.
     row, col = min(candidates, key=lambda cell: len(candidates[cell]))
- 
+
+    # Every guess placed below is one "iteration" of backtracking,
+    # whether it eventually pans out or not -- tallied across this
+    # entire call tree, including nested calls' own guesses.
+    iteration_count = 0
+
     for guess in candidates[(row, col)]:
         grid[row][col] = guess
- 
+        iteration_count += 1
+
         # Recurse: "assuming this guess is correct, can the rest of the
         # puzzle be solved?" This is the branching point -- everything
         # from here down happens inside this nested call.
-        if solve(grid):
-            return True  # this branch worked -- propagate success upward
+        solved, sub_iterations = solve(grid)
+        iteration_count += sub_iterations
+        if solved:
+            return True, iteration_count  # this branch worked -- propagate success upward
  
         # If we reach this line, the recursive call returned False,
         # which means it already reset every cell IT filled (including
@@ -358,9 +374,9 @@ def solve(grid):
     # slate) and report failure upward.
     for row, col in cells_empty_on_entry:
         grid[row][col] = 0
-    return False
- 
- 
+    return False, iteration_count
+
+
 def parse_puzzle_rows(rows):
     """
     Converts a list of 9 raw text rows into a 9x9 grid of integers.
@@ -445,7 +461,8 @@ if __name__ == "__main__":
     print("\nStarting grid:")
     display_grid(sample_puzzle_grid)
  
-    if solve(sample_puzzle_grid):
+    solved, iteration_count = solve(sample_puzzle_grid)
+    if solved:
         print("\nSolved!")
         display_grid(sample_puzzle_grid)
     else:

@@ -6,8 +6,11 @@ Two screens, shown one after another in the same window:
  
 1. PuzzleEntryGUI -- a blank 9x9 grid. Type your puzzle's clues
    directly into the squares you want filled; leave every other
-   square blank (no need to type 0 anywhere). A "Use Sample Puzzle"
-   button skips straight to the built-in sample_puzzle instead.
+   square blank (no need to type 0 anywhere). Each digit is validated
+   against its row/column/box, same as guessing on screen 2. A "Use
+   Sample Puzzle" button skips straight to the built-in sample_puzzle
+   instead, and a "Create New" button clears the grid so you can start
+   typing a fresh puzzle.
  
 2. SudokuGUI -- the solving screen. Whatever puzzle came out of
    screen 1 appears here with those clues locked (shown in a
@@ -24,7 +27,7 @@ import tkinter as tk
 from tkinter import messagebox
 from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
 
-__version__ = "1.2.0"
+__version__ = "1.2.2"
 
 ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
 
@@ -36,11 +39,18 @@ When the grid is blank -- either the first time the app opens, or
 right after clicking "New/Clear" -- you're on the puzzle entry
 screen. Type a digit into every square you want as a starting
 clue and leave every other square blank (no need to type 0
-anywhere). Then either:
+anywhere). Every digit you type is checked against that cell's
+row, column, and 3x3 box, exactly like the checks used later on
+the solving screen -- a digit that's already used elsewhere in
+that row, column, or box is rejected with a beep. Then either:
   * Click "Start Solving" to lock in whatever you typed as the
-    puzzle's givens and move to the solving screen, or
+    puzzle's givens and move to the solving screen (this is the
+    point where the game switches into guessing mode), or
   * Click "Use Sample Puzzle" to skip straight to the built-in
-    sample puzzle instead, ignoring anything you typed.
+    sample puzzle instead, ignoring anything you typed, or
+  * Click "Create New" to clear every square on this entry
+    screen and start manually typing a brand new puzzle to be
+    solved.
 
 SELECTING A CELL
 Click on any empty (white) cell to select it. The cell turns
@@ -97,11 +107,79 @@ THE BUTTONS
 """
 
 
+def _clear_window(root):
+    """
+    Destroys every widget currently in root. Must be called before
+    building either screen's widgets on top of it -- otherwise the old
+    screen's Label/Button widgets stay alive in the same grid cells as
+    the new screen's, producing overlapping title text and leftover
+    buttons whose callbacks still fire (and, in PuzzleEntryGUI's case,
+    can end the whole app via its "Start Solving" button's quit()).
+    """
+    for widget in root.winfo_children():
+        widget.destroy()
+
+
+def _show_help_window(root):
+    """
+    Opens a separate, non-modal Toplevel window with a plain-language
+    explanation of how the app works. Toplevel (rather than reusing
+    root) means this window has its own lifecycle -- closing it via
+    its Close button or its own X button just destroys that window,
+    leaving the screen that opened it completely untouched and still
+    interactive. Shared by both PuzzleEntryGUI and SudokuGUI's Help
+    buttons so the two screens can't drift out of sync with each other.
+    """
+    doc_window = tk.Toplevel(root)
+    doc_window.title("How This App Works")
+    doc_window.geometry("560x600")
+    doc_window.config(bg="black")
+
+    text_widget = tk.Text(
+        doc_window,
+        wrap="word",
+        font=("Arial", 11),
+        padx=12,
+        pady=12,
+        bg="black",
+        fg="white",
+        insertbackground="white",
+    )
+    text_widget.grid(row=0, column=0, sticky="nsew")
+    doc_window.grid_rowconfigure(0, weight=1)
+    doc_window.grid_columnconfigure(0, weight=1)
+
+    scrollbar = tk.Scrollbar(doc_window, command=text_widget.yview)
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    text_widget.config(yscrollcommand=scrollbar.set)
+
+    text_widget.insert("1.0", HELP_TEXT)
+    text_widget.config(state="disabled")
+
+    tk.Button(
+        doc_window,
+        text="Close",
+        command=doc_window.destroy,
+        bg="white",
+        fg="black",
+        activebackground="#dddddd",
+        activeforeground="black",
+    ).grid(row=1, column=0, columnspan=2, pady=8)
+
+
 class SudokuGUI:
-    def __init__(self, root, puzzle):
+    def __init__(self, root, puzzle, reiteration_count=0):
         self.root = root
         self.puzzle = puzzle  # the original puzzle, used for Reset and for
                                # knowing which cells are locked "givens"
+        self.reiteration_count = reiteration_count  # backtracking guesses
+                                                      # the solver needed for
+                                                      # the ORIGINAL puzzle,
+                                                      # computed silently
+                                                      # back on the entry
+                                                      # screen (see
+                                                      # PuzzleEntryGUI._on_start
+                                                      # / _on_sample)
         self.given_cells = {
             (r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0
         }
@@ -118,21 +196,48 @@ class SudokuGUI:
         self.default_entry_bg = None  # captured from the first editable
                                        # Entry, used to un-highlight cells
 
+        self._build_difficulty_label()
         self._build_title()
         self._build_grid()
         self._build_side_labels()
         self._build_buttons()
         self._build_candidate_area()
         self._update_candidates()
- 
+
+    def _build_difficulty_label(self):
+        """Displays a small-font "Difficulty Level: ..." line directly
+        above the main title, derived from self.reiteration_count (the
+        backtracking-guess count computed for this puzzle back on the
+        entry screen -- see PuzzleEntryGUI._on_start / _on_sample). More
+        backtracking guesses means the naked-singles pass alone couldn't
+        crack it, so a higher count is treated as a harder puzzle:
+          0 guesses      -> Easy
+          1-39 guesses   -> Moderate
+          40+ guesses    -> Hard
+        Lives directly in root's grid (same as title_label) so it gets
+        torn down along with everything else on New/Clear's
+        _clear_window() call, and recomputed fresh the next time a
+        puzzle is started."""
+        if self.reiteration_count == 0:
+            difficulty = "Easy"
+        elif self.reiteration_count < 40:
+            difficulty = "Moderate"
+        else:
+            difficulty = "Hard"
+
+        difficulty_label = tk.Label(
+            self.root, text=f"Difficulty Level: {difficulty}", font=("Arial", 10)
+        )
+        difficulty_label.grid(row=0, column=0, pady=(10, 0))
+
     def _build_title(self):
         """Displays the puzzle name with a name credit to its right,
-        e.g. 'Sudoku Solver - By Gil Shannon', at the top of the
-        window above the grid."""
+        e.g. 'Sudoku Solver - By Gil Shannon', directly below the
+        difficulty label at the top of the window, above the grid."""
         title_label = tk.Label(
             self.root, text=f"Sudoku Solver v{__version__} - By Gil Shannon", font=("Arial", 14, "bold")
         )
-        title_label.grid(row=0, column=0, pady=(10, 0))
+        title_label.grid(row=1, column=0, pady=(0, 0))
  
     def _build_grid(self):
         """Creates the 9x9 grid of Entry widgets, PLUS a 10th column
@@ -143,8 +248,8 @@ class SudokuGUI:
         an earlier version of this file did) left their spacing
         unrelated to the grid's spacing, so they drifted out of line."""
         self.grid_frame = tk.Frame(self.root)
-        self.grid_frame.grid(row=1, column=0, padx=10, pady=10)
- 
+        self.grid_frame.grid(row=2, column=0, padx=10, pady=10)
+
         for r in range(9):
             for c in range(9):
                 # Extra spacing every 3rd row/column visually separates
@@ -213,8 +318,8 @@ class SudokuGUI:
  
     def _build_buttons(self):
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=2, column=0, pady=10)
- 
+        button_frame.grid(row=3, column=0, pady=10)
+
         tk.Button(button_frame, text="Save", command=self._on_save).grid(
             row=0, column=0, padx=5
         )
@@ -234,10 +339,10 @@ class SudokuGUI:
         self.status_label = tk.Label(
             self.root, text=ENTRY_HINT_TEXT, font=("Arial", 10)
         )
-        self.status_label.grid(row=3, column=0)
- 
+        self.status_label.grid(row=4, column=0)
+
         self.backup_label = tk.Label(self.root, text="", font=("Arial", 10))
-        self.backup_label.grid(row=4, column=0)
+        self.backup_label.grid(row=5, column=0)
 
     def _build_candidate_area(self):
         """
@@ -252,8 +357,18 @@ class SudokuGUI:
         """
         self.candidate_frame = tk.Frame(self.root)
         self.candidate_frame.grid(
-            row=1, column=1, rowspan=4, sticky="se", padx=10, pady=10
+            row=2, column=1, rowspan=4, sticky="se", padx=10, pady=10
         )
+
+        # A persistent label (NOT one of self.candidate_buttons, so
+        # _clear_candidate_buttons() never touches it) for "Reiterations:
+        # N", shown once the puzzle is complete. Row 3 sits below the
+        # candidate buttons' own rows (at most 3 rows for 9 digits, i//3
+        # of 0-2), so it never overlaps them.
+        self.reiteration_label = tk.Label(
+            self.candidate_frame, text="", font=("Arial", 10, "italic")
+        )
+        self.reiteration_label.grid(row=3, column=0, columnspan=3, pady=(8, 0))
 
     def _read_grid(self):
         """Reads the current state of every Entry widget into a plain
@@ -317,6 +432,15 @@ class SudokuGUI:
             self._clear_selection()
 
         self._update_candidates()
+
+        # The person may have just typed the LAST remaining digit --
+        # check whether every cell is now filled (validation above
+        # already guarantees any filled grid is a correctly-solved one,
+        # since every digit that landed passed the row/column/box check)
+        # and show the same completion message the Solve button does.
+        grid = self._read_grid()
+        if all(grid[r][c] != 0 for r in range(9) for c in range(9)):
+            self._show_reiteration_count()
 
     def _valid_candidates(self, row, col):
         """
@@ -402,6 +526,19 @@ class SudokuGUI:
             btn.destroy()
         self.candidate_buttons = []
 
+    def _show_reiteration_count(self):
+        """Displays 'Reiterations: N' using the backtracking-guess count
+        computed for the original puzzle (see self.reiteration_count).
+        Called whenever the puzzle becomes fully solved -- via the Solve
+        button or by the person manually filling the last empty cell."""
+        self.reiteration_label.config(text=f"Reiterations: {self.reiteration_count}")
+
+    def _clear_reiteration_count(self):
+        """Hides the 'Reiterations: N' message. Called whenever Save,
+        Reset, Help, or New/Clear is clicked, so the message never lingers
+        past the moment that prompted it."""
+        self.reiteration_label.config(text="")
+
     def _update_candidates(self):
         """Recomputes row/column missing-digit sets from the CURRENT
         grid (givens + whatever guesses are typed in so far) and
@@ -426,6 +563,7 @@ class SudokuGUI:
         saving again later adds ANOTHER snapshot on top, it doesn't
         replace the previous one.
         """
+        self._clear_reiteration_count()
         grid = self._read_grid()
         self.backup_stack.append(grid)
         self._update_backup_label()
@@ -461,8 +599,9 @@ class SudokuGUI:
         given puzzle will simply be overwritten by the solver."""
         self._clear_selection()
         grid = self._read_grid()
- 
-        if solve(grid):
+
+        solved, _ = solve(grid)
+        if solved:
             for (r, c), entry in self.entries.items():
                 if (r, c) not in self.given_cells:
                     entry.config(state="normal")
@@ -470,6 +609,7 @@ class SudokuGUI:
                     entry.insert(0, str(grid[r][c]))
                     entry.config(state="disabled", disabledforeground="blue")
             self.status_label.config(text="Solved!", fg="green")
+            self._show_reiteration_count()
         else:
             self.status_label.config(
                 text="No solution exists for the current entries.", fg="red"
@@ -487,6 +627,7 @@ class SudokuGUI:
         original givens.
         """
         self._clear_selection()
+        self._clear_reiteration_count()
         if self.backup_stack:
             grid = self.backup_stack.pop()
             self._apply_grid_to_entries(grid)
@@ -507,35 +648,8 @@ class SudokuGUI:
         self._update_candidates()
 
     def _on_help(self):
-        """
-        Opens a separate, non-modal Toplevel window with a plain-language
-        explanation of how the app works. Toplevel (rather than reusing
-        root) means this window has its own lifecycle -- closing it via
-        its Close button or its own X button just destroys that window,
-        leaving the main solving window and its state completely
-        untouched and still interactive.
-        """
-        doc_window = tk.Toplevel(self.root)
-        doc_window.title("How This App Works")
-        doc_window.geometry("560x600")
-
-        text_widget = tk.Text(
-            doc_window, wrap="word", font=("Arial", 11), padx=12, pady=12
-        )
-        text_widget.grid(row=0, column=0, sticky="nsew")
-        doc_window.grid_rowconfigure(0, weight=1)
-        doc_window.grid_columnconfigure(0, weight=1)
-
-        scrollbar = tk.Scrollbar(doc_window, command=text_widget.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        text_widget.config(yscrollcommand=scrollbar.set)
-
-        text_widget.insert("1.0", HELP_TEXT)
-        text_widget.config(state="disabled")
-
-        tk.Button(doc_window, text="Close", command=doc_window.destroy).grid(
-            row=1, column=0, columnspan=2, pady=8
-        )
+        self._clear_reiteration_count()
+        _show_help_window(self.root)
 
     def _on_new_clear(self):
         """
@@ -547,6 +661,7 @@ class SudokuGUI:
         transition main() drives the first time the app starts (see
         _run_puzzle_entry_screen()).
         """
+        self._clear_reiteration_count()
         confirmed = messagebox.askyesno(
             "Start a New Puzzle?",
             "This will discard the current puzzle and all saved "
@@ -555,13 +670,14 @@ class SudokuGUI:
         if not confirmed:
             return
 
-        puzzle = _run_puzzle_entry_screen(self.root)
+        puzzle, reiteration_count = _run_puzzle_entry_screen(self.root)
         if puzzle is None:
             self.root.destroy()
             return
 
+        _clear_window(self.root)
         self.root.title("Sudoku Solver")
-        SudokuGUI(self.root, puzzle)
+        SudokuGUI(self.root, puzzle, reiteration_count)
 
 
 class PuzzleEntryGUI:
@@ -583,19 +699,24 @@ class PuzzleEntryGUI:
         self.root = root
         self.entries = {}
         self.result = None  # set once the person clicks a button below
- 
+        self.reiteration_count = 0  # backtracking guesses the solver
+                                     # needed for self.result, computed
+                                     # silently in _on_start/_on_sample
+
         self._build_title()
         self._build_grid()
         self._build_buttons()
  
     def _build_title(self):
         """Displays the puzzle name with a name credit to its right,
-        e.g. 'Enter Your Puzzle - By Gil Shannon', at the top of the
-        window above the grid."""
-        title_label = tk.Label(
-            self.root, text="Enter Your Puzzle - By Gil Shannon", font=("Arial", 14, "bold")
+        e.g. 'Enter Your Puzzle v1.2.1 - By Gil Shannon', at the top
+        of the window above the grid."""
+        self.title_label = tk.Label(
+            self.root,
+            text=f"Enter Your Puzzle v{__version__} - By Gil Shannon",
+            font=("Arial", 14, "bold"),
         )
-        title_label.grid(row=0, column=0, pady=(10, 0))
+        self.title_label.grid(row=0, column=0, pady=(10, 0))
  
     def _build_grid(self):
         """Same 9x9 layout and 3x3 box-divider spacing as SudokuGUI's
@@ -629,7 +750,13 @@ class PuzzleEntryGUI:
         tk.Button(
             button_frame, text="Use Sample Puzzle", command=self._on_sample
         ).grid(row=0, column=1, padx=5)
- 
+        tk.Button(
+            button_frame, text="Create New", command=self._on_create_new
+        ).grid(row=0, column=2, padx=5)
+        tk.Button(button_frame, text="Help", command=self._on_help).grid(
+            row=0, column=3, padx=5
+        )
+
         self.hint_label = tk.Label(
             self.root,
             text=ENTRY_HINT_TEXT,
@@ -638,22 +765,45 @@ class PuzzleEntryGUI:
         self.hint_label.grid(row=3, column=0)
  
     def _on_cell_edit(self, row, col):
-        """Same single-digit-only enforcement as the main solving grid:
-        keeps only the most recently typed valid digit 1-9. No 0's are
-        ever allowed to sit in a cell here -- blank IS the "no clue"
-        state, exactly as requested."""
+        """
+        Narrows whatever was typed down to a single digit 1-9 (no 0's
+        are ever allowed to sit in a cell here -- blank IS the "no
+        clue" state), then VALIDATES that digit with the exact same
+        row/column/box rule the solving screen's candidate buttons use
+        (see SudokuGUI._valid_candidates): it must not already be
+        used elsewhere in this cell's row, column, or 3x3 box among
+        the OTHER clues typed so far. An invalid digit is rejected --
+        the cell stays blank and the computer beeps -- so the puzzle
+        you hand off to "Start Solving" can never start out broken.
+        """
         entry = self.entries[(row, col)]
         text = entry.get()
- 
+
         if len(text) > 1:
             text = text[-1]
         if text and text not in "123456789":
             text = ""
- 
+
+        if text:
+            digit = int(text)
+            if digit not in self._valid_candidates(row, col):
+                self.root.bell()
+                text = ""
+
         entry.delete(0, tk.END)
         if text:
             entry.insert(0, text)
- 
+
+    def _valid_candidates(self, row, col):
+        """Same computation as SudokuGUI._valid_candidates: digits
+        missing from this cell's row AND column AND box, treating the
+        cell itself as empty."""
+        grid = self._read_grid()
+        grid[row][col] = 0
+        row_missing, col_missing, box_missing = build_tracking_sets(grid)
+        box = box_index(row, col)
+        return sorted(row_missing[row] & col_missing[col] & box_missing[box])
+
     def _read_grid(self):
         """Reads the current state of every cell into a plain 9x9 grid.
         A blank cell becomes 0 (the "no clue" placeholder every solving
@@ -667,15 +817,49 @@ class PuzzleEntryGUI:
         return grid
  
     def _on_start(self):
-        self.result = self._read_grid()
+        grid = self._read_grid()
+        filled_count = sum(1 for row in grid for value in row if value != 0)
+        if filled_count <= 5:
+            messagebox.showwarning(
+                "Not Enough Clues", "Must enter more squares before starting."
+            )
+            return  # stay on this screen so more clues can be added
+
+        self.result = grid
+        # Background/silent: solve a COPY so this never touches what's
+        # displayed -- only used to count how many backtracking guesses
+        # (not naked-singles steps) the ORIGINAL puzzle needs, for later
+        # display once SudokuGUI's puzzle becomes solved.
+        _, self.reiteration_count = solve([row[:] for row in grid])
         self.root.quit()  # ends THIS mainloop() call; window stays open
- 
+
     def _on_sample(self):
         # A shallow copy per row, so editing this grid later never
         # touches the original sample_puzzle constant.
         self.result = [row[:] for row in sample_puzzle]
+        # Same silent background count as _on_start, on its own copy --
+        # the "Must enter more squares" check above doesn't apply here
+        # since sample_puzzle is always a valid, complete-enough puzzle.
+        _, self.reiteration_count = solve([row[:] for row in self.result])
         self.root.quit()
- 
+
+    def _on_create_new(self):
+        """
+        Clears every square on THIS entry screen back to blank, so the
+        person can manually type a brand new puzzle to be solved
+        without closing and reopening the app. Doesn't move to the
+        solving screen -- that only happens via "Start Solving". Also
+        relabels the title bar at the top of the screen to make clear
+        the grid is now in manual entry mode.
+        """
+        for entry in self.entries.values():
+            entry.delete(0, tk.END)
+        self.hint_label.config(text=ENTRY_HINT_TEXT, fg="black")
+        self.title_label.config(text="Sudoku - Manual Enter Mode")
+
+    def _on_help(self):
+        _show_help_window(self.root)
+
     def on_window_closed(self):
         """Called if the person closes the window directly (the X
         button) instead of clicking a button. Leaves result as None so
@@ -689,15 +873,15 @@ def _run_puzzle_entry_screen(root):
     Clears whatever is currently in the window and shows the blank
     PuzzleEntryGUI screen, then blocks (via a nested mainloop) until
     the person clicks "Start Solving", clicks "Use Sample Puzzle", or
-    closes the window. Returns the puzzle grid they picked, or None if
-    they closed the window without picking one.
+    closes the window. Returns (puzzle, reiteration_count) for the
+    puzzle they picked, or (None, 0) if they closed the window without
+    picking one.
 
     Pulled out of main() so SudokuGUI's "New/Clear" button can drive
     the exact same entry-screen transition main() uses on first
     startup, without duplicating it.
     """
-    for widget in root.winfo_children():
-        widget.destroy()
+    _clear_window(root)
 
     root.title("Enter Your Puzzle")
     entry_screen = PuzzleEntryGUI(root)
@@ -707,19 +891,20 @@ def _run_puzzle_entry_screen(root):
     root.protocol("WM_DELETE_WINDOW", entry_screen.on_window_closed)
     root.mainloop()
 
-    return entry_screen.result
+    return entry_screen.result, entry_screen.reiteration_count
 
 
 def main():
     root = tk.Tk()
 
-    puzzle = _run_puzzle_entry_screen(root)
+    puzzle, reiteration_count = _run_puzzle_entry_screen(root)
     if puzzle is None:
         root.destroy()
         return
 
+    _clear_window(root)
     root.title("Sudoku Solver")
-    SudokuGUI(root, puzzle)
+    SudokuGUI(root, puzzle, reiteration_count)
     root.mainloop()
  
  
