@@ -84,7 +84,7 @@ ROW NUMBERS (RIGHT SIDE)
 The numbers shown to the right of each row list every digit
 still missing from that row. As you fill in cells, digits drop
 out of this list. A row that's completely and correctly filled
-shows "done".
+shows a checkmark.
 
 COLUMN NUMBERS (BELOW EACH COLUMN)
 The numbers shown below each column work the same way, but for
@@ -176,7 +176,7 @@ def _show_help_window(root):
 
 
 class SudokuGUI:
-    def __init__(self, root, puzzle, reiteration_count=0):
+    def __init__(self, root, puzzle, reiteration_count=0, solution=None):
         self.root = root
         self.puzzle = puzzle  # the original puzzle, used for Reset and for
                                # knowing which cells are locked "givens"
@@ -188,6 +188,12 @@ class SudokuGUI:
                                                       # screen (see
                                                       # PuzzleEntryGUI._on_start
                                                       # / _on_sample)
+        self.solution = solution  # the solver's fully-solved grid for this
+                                   # puzzle, computed silently on the entry
+                                   # screen alongside reiteration_count above.
+                                   # Compared against whatever grid the person
+                                   # manually fills in -- see _on_cell_edit --
+                                   # to detect puzzles with multiple solutions.
         self.given_cells = {
             (r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0
         }
@@ -378,6 +384,15 @@ class SudokuGUI:
         )
         self.reiteration_label.grid(row=3, column=0, columnspan=3, pady=(8, 0))
 
+        # Same idea as reiteration_label, one row below it -- the two
+        # are mutually exclusive (a fully-filled grid either matches
+        # self.solution or it doesn't) but kept as separate widgets/rows
+        # so they never fight over the same space.
+        self.multiple_solutions_label = tk.Label(
+            self.candidate_frame, text="", font=("Arial", 10, "italic"), fg="red"
+        )
+        self.multiple_solutions_label.grid(row=4, column=0, columnspan=3, pady=(4, 0))
+
     def _read_grid(self):
         """Reads the current state of every Entry widget into a plain
         9x9 list-of-lists grid, exactly the format sudoku_solver.py's
@@ -441,14 +456,26 @@ class SudokuGUI:
 
         self._update_candidates()
 
-        # The person may have just typed the LAST remaining digit --
-        # check whether every cell is now filled (validation above
-        # already guarantees any filled grid is a correctly-solved one,
-        # since every digit that landed passed the row/column/box check)
-        # and show the same completion message the Solve button does.
+        # The person may have just typed the LAST remaining digit, or
+        # may have just edited a cell that was previously part of a full
+        # grid -- either way, re-check fullness fresh every time so a
+        # stale "Multiple Solutions" message never lingers once the grid
+        # stops being fully filled.
+        self._clear_multiple_solutions_message()
         grid = self._read_grid()
         if all(grid[r][c] != 0 for r in range(9) for c in range(9)):
-            self._show_reiteration_count()
+            # Validation above already guarantees any filled grid is a
+            # legally completed one (every digit that landed passed the
+            # row/column/box check) -- but a legal completion isn't
+            # necessarily THE solution the solver found for this puzzle.
+            # Compare against it: a match means this is the puzzle's
+            # (unique) solution, so run the exact same logic the Solve
+            # button runs. A mismatch means the puzzle has more than one
+            # valid solution.
+            if grid == self.solution:
+                self._on_solve()
+            else:
+                self._show_multiple_solutions_message()
 
     def _valid_candidates(self, row, col):
         """
@@ -557,11 +584,27 @@ class SudokuGUI:
  
         for r in range(9):
             digits = "".join(str(d) for d in sorted(row_missing[r]))
-            self.row_labels[r].config(text=digits if digits else "done")
+            self.row_labels[r].config(text=digits if digits else "✓")
  
         for c in range(9):
             digits = "\n".join(str(d) for d in sorted(col_missing[c]))
             self.col_labels[c].config(text=digits if digits else "\u2713")
+
+    def _show_multiple_solutions_message(self):
+        """Displays 'Multiple Solutions' in the lower-right corner
+        (candidate_frame, next to reiteration_label). Shown when the
+        grid becomes fully filled with a legally completed grid (every
+        digit already passed the row/column/box check on entry) that
+        nonetheless doesn't match self.solution -- the solver's own
+        solution for this puzzle -- which means the puzzle admits more
+        than one valid completion."""
+        self.multiple_solutions_label.config(text="Multiple Solutions")
+
+    def _clear_multiple_solutions_message(self):
+        """Hides the 'Multiple Solutions' message. Called whenever any
+        other button is pressed, so it never lingers past the moment
+        that prompted it -- same pattern as _clear_reiteration_count()."""
+        self.multiple_solutions_label.config(text="")
  
     def _on_save(self):
         """
@@ -572,6 +615,7 @@ class SudokuGUI:
         replace the previous one.
         """
         self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
         grid = self._read_grid()
         self.backup_stack.append(grid)
         self._update_backup_label()
@@ -606,6 +650,7 @@ class SudokuGUI:
         result. Guessed cells that turn out inconsistent with the
         given puzzle will simply be overwritten by the solver."""
         self._clear_selection()
+        self._clear_multiple_solutions_message()
         grid = self._read_grid()
 
         solved, _ = solve(grid)
@@ -636,6 +681,7 @@ class SudokuGUI:
         """
         self._clear_selection()
         self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
         if self.backup_stack:
             grid = self.backup_stack.pop()
             self._apply_grid_to_entries(grid)
@@ -657,6 +703,7 @@ class SudokuGUI:
 
     def _on_help(self):
         self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
         _show_help_window(self.root)
 
     def _on_new_clear(self):
@@ -670,6 +717,7 @@ class SudokuGUI:
         _run_puzzle_entry_screen()).
         """
         self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
         confirmed = messagebox.askyesno(
             "Start a New Puzzle?",
             "This will discard the current puzzle and all saved "
@@ -678,14 +726,14 @@ class SudokuGUI:
         if not confirmed:
             return
 
-        puzzle, reiteration_count = _run_puzzle_entry_screen(self.root)
+        puzzle, reiteration_count, solution = _run_puzzle_entry_screen(self.root)
         if puzzle is None:
             self.root.destroy()
             return
 
         _clear_window(self.root)
         self.root.title("Sudoku Solver")
-        SudokuGUI(self.root, puzzle, reiteration_count)
+        SudokuGUI(self.root, puzzle, reiteration_count, solution)
 
 
 class PuzzleEntryGUI:
@@ -710,6 +758,10 @@ class PuzzleEntryGUI:
         self.reiteration_count = 0  # backtracking guesses the solver
                                      # needed for self.result, computed
                                      # silently in _on_start/_on_sample
+        self.solution = None  # the solver's fully-solved grid for
+                               # self.result, also computed silently in
+                               # _on_start/_on_sample -- SudokuGUI compares
+                               # against this to detect multiple solutions
 
         self._build_title()
         self._build_grid()
@@ -835,20 +887,26 @@ class PuzzleEntryGUI:
 
         self.result = grid
         # Background/silent: solve a COPY so this never touches what's
-        # displayed -- only used to count how many backtracking guesses
-        # (not naked-singles steps) the ORIGINAL puzzle needs, for later
-        # display once SudokuGUI's puzzle becomes solved.
-        _, self.reiteration_count = solve([row[:] for row in grid])
+        # displayed -- used to count how many backtracking guesses (not
+        # naked-singles steps) the ORIGINAL puzzle needs, AND to keep the
+        # fully-solved grid itself, both for later use once SudokuGUI's
+        # puzzle becomes solved.
+        solution_grid = [row[:] for row in grid]
+        _, self.reiteration_count = solve(solution_grid)
+        self.solution = solution_grid
         self.root.quit()  # ends THIS mainloop() call; window stays open
 
     def _on_sample(self):
         # A shallow copy per row, so editing this grid later never
         # touches the original sample_puzzle constant.
         self.result = [row[:] for row in sample_puzzle]
-        # Same silent background count as _on_start, on its own copy --
-        # the "Must enter more squares" check above doesn't apply here
-        # since sample_puzzle is always a valid, complete-enough puzzle.
-        _, self.reiteration_count = solve([row[:] for row in self.result])
+        # Same silent background count/solution as _on_start, on its own
+        # copy -- the "Must enter more squares" check above doesn't apply
+        # here since sample_puzzle is always a valid, complete-enough
+        # puzzle.
+        solution_grid = [row[:] for row in self.result]
+        _, self.reiteration_count = solve(solution_grid)
+        self.solution = solution_grid
         self.root.quit()
 
     def _on_create_new(self):
@@ -881,9 +939,9 @@ def _run_puzzle_entry_screen(root):
     Clears whatever is currently in the window and shows the blank
     PuzzleEntryGUI screen, then blocks (via a nested mainloop) until
     the person clicks "Start Solving", clicks "Use Sample Puzzle", or
-    closes the window. Returns (puzzle, reiteration_count) for the
-    puzzle they picked, or (None, 0) if they closed the window without
-    picking one.
+    closes the window. Returns (puzzle, reiteration_count, solution) for
+    the puzzle they picked, or (None, 0, None) if they closed the window
+    without picking one.
 
     Pulled out of main() so SudokuGUI's "New/Clear" button can drive
     the exact same entry-screen transition main() uses on first
@@ -899,20 +957,20 @@ def _run_puzzle_entry_screen(root):
     root.protocol("WM_DELETE_WINDOW", entry_screen.on_window_closed)
     root.mainloop()
 
-    return entry_screen.result, entry_screen.reiteration_count
+    return entry_screen.result, entry_screen.reiteration_count, entry_screen.solution
 
 
 def main():
     root = tk.Tk()
 
-    puzzle, reiteration_count = _run_puzzle_entry_screen(root)
+    puzzle, reiteration_count, solution = _run_puzzle_entry_screen(root)
     if puzzle is None:
         root.destroy()
         return
 
     _clear_window(root)
     root.title("Sudoku Solver")
-    SudokuGUI(root, puzzle, reiteration_count)
+    SudokuGUI(root, puzzle, reiteration_count, solution)
     root.mainloop()
  
  
