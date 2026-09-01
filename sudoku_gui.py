@@ -27,11 +27,19 @@ import tkinter as tk
 from tkinter import messagebox
 from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
 
 HELP_TEXT = """\
+Author: Gil Shannon
+Email: gmshannon99@gmail.com
+Note: Any comments, questions, or bug reports can be sent to the email
+above.
+
+This project is open source. View the code on GitHub:
+https://github.com/GMShannon99/sudoku-solver
+
 HOW THIS APP WORKS
 
 STARTING FROM A BLANK GRID
