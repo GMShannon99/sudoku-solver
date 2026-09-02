@@ -48,15 +48,23 @@ HELP_LAST_UPDATED = "September 2, 2026"
 
 SAVE_FILE_NAME = "Sudoku_Save.txt"
 
-# Sudoku_Save.txt stores only a difficulty LETTER per record, not the
-# original backtracking-guess count -- so Paste Puzzle (see
-# PuzzleEntryGUI._on_paste) can't recover the exact original number,
-# only which of the three tiers the puzzle falls into. These are
-# representative reiteration_count values chosen so that
-# sudoku_solver.rate_difficulty() maps each one straight back to the
-# matching tier: 0 is Easy's defining value, 1 is Moderate's lowest,
-# 40 is Hard's lowest.
-DIFFICULTY_LETTER_TO_REITERATION_COUNT = {"E": 0, "M": 1, "H": 40}
+# The trailing character in a Sudoku_Save.txt record is DOCUMENTATION
+# ONLY -- PuzzleEntryGUI._on_paste independently re-validates every
+# pasted puzzle by actually solving it, and uses solve()'s real results
+# for the difficulty label, ignoring whatever this character says. A
+# record is still structurally valid, though, only if this character is
+# one of these: E/M/H, or a single space meaning "not recorded."
+VALID_DIFFICULTY_CHARACTERS = {"E", "M", "H", " "}
+
+# Caps how many backtracking guesses PuzzleEntryGUI._on_paste's
+# validate-by-solving check will spend on a pasted puzzle before giving
+# up and treating it as invalid -- see solve()'s max_iterations for why
+# this exists (a corrupted/untrusted grid's contradiction can otherwise
+# take an impractically long time to prove). 50,000 is roughly 27x what
+# this app's own hardest reference puzzle (sample_puzzle, ~1,850
+# guesses) has ever needed, so a genuinely valid puzzle is never at
+# realistic risk of a false rejection.
+PASTE_VALIDATION_MAX_ITERATIONS = 50_000
 
 ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
 
@@ -230,13 +238,22 @@ def _parse_save_record(text):
     Validates and parses a single Sudoku_Save.txt record (see
     SudokuGUI._on_save_to_file for how these get written): exactly 82
     characters -- 81 grid digits (0-9, row by row, 9 per row) followed
-    by one difficulty letter, E/M/H. A single trailing newline (as every
-    line in the file has) is tolerated. Anything else -- wrong length,
-    non-digit grid characters, more than one line, an unrecognized
-    difficulty letter -- is rejected.
+    by one difficulty character, which may be E, M, H, or a single
+    space (meaning "not recorded" -- see VALID_DIFFICULTY_CHARACTERS).
+    A single trailing newline (as every line in the file has) is
+    tolerated. Anything else -- wrong length, non-digit grid
+    characters, more than one line, an unrecognized difficulty
+    character -- is rejected.
 
-    Returns (grid, difficulty_letter) on success, or (None, None) if
-    text isn't exactly one valid record.
+    Note this deliberately does NOT call .strip() on the chosen line:
+    doing so would silently eat a legitimate trailing-space difficulty
+    character, which is exactly the case this function needs to accept
+    rather than reject.
+
+    Returns (grid, difficulty_character) on success, or (None, None) if
+    text isn't exactly one valid record. difficulty_character is
+    documentation only -- see PuzzleEntryGUI._on_paste, which
+    independently re-validates and re-rates the puzzle by solving it.
     """
     if not text:
         return None, None
@@ -244,21 +261,21 @@ def _parse_save_record(text):
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) != 1:
         return None, None
-    record = lines[0].strip()
+    record = lines[0]
 
     if len(record) != 82:
         return None, None
 
-    grid_digits, difficulty_letter = record[:81], record[81]
+    grid_digits, difficulty_character = record[:81], record[81]
     if not grid_digits.isdigit():
         return None, None
-    if difficulty_letter not in DIFFICULTY_LETTER_TO_REITERATION_COUNT:
+    if difficulty_character not in VALID_DIFFICULTY_CHARACTERS:
         return None, None
 
     grid = [[0] * 9 for _ in range(9)]
     for i, ch in enumerate(grid_digits):
         grid[i // 9][i % 9] = int(ch)
-    return grid, difficulty_letter
+    return grid, difficulty_character
 
 
 def _clear_window(root):
@@ -1131,6 +1148,8 @@ class PuzzleEntryGUI:
         the cell stays blank and the computer beeps -- so the puzzle
         you hand off to "Start Solving" can never start out broken.
         """
+        self._clear_paste_error()
+
         entry = self.entries[(row, col)]
         text = entry.get()
 
@@ -1148,6 +1167,17 @@ class PuzzleEntryGUI:
         entry.delete(0, tk.END)
         if text:
             entry.insert(0, text)
+
+    def _clear_paste_error(self):
+        """
+        Resets hint_label back to its normal ENTRY_HINT_TEXT/black
+        state, clearing any lingering red "Pasted puzzle is not valid."
+        message left by a previous failed Paste Puzzle attempt (see
+        _on_paste). Called at the start of every button handler on this
+        screen and on every keystroke (_on_cell_edit), so the error
+        message never lingers past the moment it stopped being relevant.
+        """
+        self.hint_label.config(text=ENTRY_HINT_TEXT, fg="black")
 
     def _valid_candidates(self, row, col):
         """Same computation as SudokuGUI._valid_candidates: digits
@@ -1172,6 +1202,7 @@ class PuzzleEntryGUI:
         return grid
  
     def _on_start(self):
+        self._clear_paste_error()
         grid = self._read_grid()
         filled_count = sum(1 for row in grid for value in row if value != 0)
         if filled_count <= 5:
@@ -1192,6 +1223,7 @@ class PuzzleEntryGUI:
         self.root.quit()  # ends THIS mainloop() call; window stays open
 
     def _on_sample(self):
+        self._clear_paste_error()
         # A shallow copy per row, so editing this grid later never
         # touches the original sample_puzzle constant.
         self.result = [row[:] for row in sample_puzzle]
@@ -1226,6 +1258,7 @@ class PuzzleEntryGUI:
         since landing on the requested difficulty may take several
         internal attempts (see generate_puzzle's docstring).
         """
+        self._clear_paste_error()
         target_difficulty = self.difficulty_var.get() or "Moderate"
 
         self.hint_label.config(text="Generating puzzle...", fg="black")
@@ -1242,37 +1275,72 @@ class PuzzleEntryGUI:
 
     def _on_paste(self):
         """
-        Reads the system clipboard and validates it as a single
-        Sudoku_Save.txt record (see SudokuGUI._on_save_to_file): exactly
-        82 characters -- 81 grid digits (0-9, row by row) followed by
-        one difficulty letter, E/M/H. Anything else (wrong length,
-        invalid characters, more than one line) is rejected with an
-        error message and nothing on screen changes.
+        Reads the system clipboard and validates it STRUCTURALLY as a
+        single Sudoku_Save.txt record (see SudokuGUI._on_save_to_file):
+        exactly 82 characters -- 81 grid digits (0-9, row by row)
+        followed by one difficulty character, which may be E, M, H, or
+        a single space. Anything else (wrong length, invalid
+        characters, more than one line) is rejected immediately with an
+        error dialog and nothing on screen changes.
 
-        On a valid record, this fills the entry grid AND proceeds
-        straight to the solving screen -- same as "Use Sample Puzzle" --
-        carrying the saved difficulty letter forward as
-        self.reiteration_count (via DIFFICULTY_LETTER_TO_REITERATION_COUNT)
-        so SudokuGUI's difficulty label shows the puzzle's saved rating
-        without recalculating it. self.solution still needs solve(),
-        though -- SudokuGUI's "Multiple Solutions" check depends on
-        having the actual solved grid, which the save-file format
-        doesn't store.
+        That trailing character is documentation only, though --
+        deliberately NOT trusted as the puzzle's actual difficulty (see
+        VALID_DIFFICULTY_CHARACTERS). Once the record parses, this
+        independently re-validates the puzzle itself by actually
+        running solve() on it:
+          * If solve() finds no solution (the puzzle is corrupted,
+            contradictory, or was hand-edited into an invalid state),
+            nothing is loaded into the grid and nothing proceeds to the
+            solving screen -- instead, hint_label shows a red "Pasted
+            puzzle is not valid." message (see _clear_paste_error for
+            how that gets cleared again).
+          * If solve() succeeds, its REAL results -- the actual
+            reiteration_count, not whatever the file's trailing
+            character claimed -- are what SudokuGUI's difficulty label
+            ends up showing, exactly as if the puzzle had been typed in
+            by hand and sent through "Start Solving".
+        solve() can take a moment on a hard puzzle, so hint_label shows
+        "Validating pasted puzzle..." while this runs. It's also called
+        with a max_iterations cap (see sudoku_solver.solve): a
+        corrupted or hand-edited grid can hide a contradiction that
+        only surfaces after backtracking has exhausted a huge chunk of
+        the search space, which -- unlike solving a genuinely hard but
+        valid puzzle -- can take an impractically long time (this app's
+        own "world's hardest sudoku"-style sample_puzzle needs under
+        2,000 guesses; a contrived corrupted grid was measured taking
+        tens of thousands of guesses and multiple seconds per 10,000,
+        with no guarantee of ever finishing). PASTE_VALIDATION_MAX_ITERATIONS
+        is set generously above any puzzle this solver has ever
+        actually needed, so a real valid puzzle is never at risk of a
+        false rejection, while a corrupted one can't freeze the app.
         """
+        self._clear_paste_error()
+
         try:
             clipboard_text = self.root.clipboard_get()
         except tk.TclError:
             clipboard_text = None
 
-        grid, difficulty_letter = _parse_save_record(clipboard_text)
+        grid, _difficulty_character = _parse_save_record(clipboard_text)
         if grid is None:
             messagebox.showerror(
                 "Could Not Read Puzzle",
                 "The clipboard doesn't contain a valid saved puzzle "
                 "record. Copy a single line from Sudoku_Save.txt (81 "
-                "grid digits followed by one difficulty letter -- E, M, "
-                "or H) and try again.",
+                "grid digits followed by one difficulty character -- "
+                "E, M, H, or a blank space) and try again.",
             )
+            return
+
+        self.hint_label.config(text="Validating pasted puzzle...", fg="black")
+        self.root.update_idletasks()
+
+        solution_grid = [row[:] for row in grid]
+        solved, reiteration_count = solve(
+            solution_grid, max_iterations=PASTE_VALIDATION_MAX_ITERATIONS
+        )
+        if not solved:
+            self.hint_label.config(text="Pasted puzzle is not valid.", fg="red")
             return
 
         for (r, c), entry in self.entries.items():
@@ -1281,12 +1349,8 @@ class PuzzleEntryGUI:
                 entry.insert(0, str(grid[r][c]))
 
         self.result = grid
-        solution_grid = [row[:] for row in grid]
-        solve(solution_grid)
         self.solution = solution_grid
-        self.reiteration_count = DIFFICULTY_LETTER_TO_REITERATION_COUNT[
-            difficulty_letter
-        ]
+        self.reiteration_count = reiteration_count
         self.root.quit()
 
     def _on_create_new(self):
@@ -1300,10 +1364,11 @@ class PuzzleEntryGUI:
         """
         for entry in self.entries.values():
             entry.delete(0, tk.END)
-        self.hint_label.config(text=ENTRY_HINT_TEXT, fg="black")
+        self._clear_paste_error()
         self.title_label.config(text="Sudoku - Manual Enter Mode")
 
     def _on_help(self):
+        self._clear_paste_error()
         _show_help_window(self.root)
 
     def on_window_closed(self):

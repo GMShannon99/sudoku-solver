@@ -229,14 +229,16 @@ def solve_naked_singles(grid):
     return total_placed, row_missing, col_missing, box_missing
  
  
-def solve(grid, randomize=False):
+def solve(grid, randomize=False, max_iterations=None, _counter=None):
     """
     Fully solves grid in place, combining naked-singles propagation
     with MRV-guided recursive backtracking. Returns a tuple
     (solved, iteration_count):
       solved          -- True if a solution was found (grid now holds
                           it), or False if no solution exists for the
-                          current state of grid.
+                          current state of grid -- OR if max_iterations
+                          was reached before that could be determined
+                          either way (see max_iterations below).
       iteration_count -- how many guesses the MRV backtracking step
                           (below) attempted across this whole call
                           tree, counting failed branches too. Naked
@@ -255,6 +257,41 @@ def solve(grid, randomize=False):
                           other caller (the GUI, the terminal entry
                           point) leaves it off and keeps getting
                           deterministic results.
+      max_iterations   -- if set, the search aborts and reports
+                          "not solved" once this many guesses have been
+                          attempted across the whole call tree, rather
+                          than running unbounded. Left as None (the
+                          default) by every normal caller, since a
+                          puzzle that's KNOWN to be well-formed (typed
+                          in, generated, or previously solved) should
+                          never need this. It exists for validating
+                          UNTRUSTED input -- see
+                          PuzzleEntryGUI._on_paste in sudoku_gui.py --
+                          where a corrupted or hand-edited grid can
+                          contain a contradiction that isn't visible as
+                          a simple "this cell has zero candidates" dead
+                          end, but only shows up after backtracking has
+                          exhausted a combinatorially huge portion of
+                          the search space -- which can take an
+                          impractically long time (minutes or more) on
+                          a grid that's otherwise nearly blank. Treating
+                          "gave up after max_iterations" the same as
+                          "no solution" is a deliberate, documented
+                          trade-off: it bounds worst-case runtime at the
+                          cost of a theoretical false rejection for some
+                          pathological-but-technically-valid puzzle that
+                          would have needed more guesses than the cap
+                          allows -- in practice, even deliberately hard
+                          puzzles solved by this function need at most
+                          a few hundred guesses (see generate_puzzle's
+                          Hard-difficulty puzzles), so a generous cap
+                          essentially never affects a genuinely valid
+                          puzzle.
+      _counter         -- internal only: a shared [count] list threaded
+                          through the recursion so max_iterations can be
+                          checked against the TOTAL across every nested
+                          call, not just each call's own local count.
+                          Callers should never pass this themselves.
 
     --- High-level recursive strategy ---
  
@@ -325,12 +362,17 @@ def solve(grid, randomize=False):
          up to the very first solve() call, also returns True without
          undoing anything, since a solution was found.
     """
+    # The shared counter max_iterations is checked against -- only ever
+    # allocated once, by the outermost call in this call tree.
+    if max_iterations is not None and _counter is None:
+        _counter = [0]
+
     # Snapshot of every cell that's currently empty, BEFORE this call
     # does anything. If this call fails, every one of these cells gets
     # reset back to 0 -- this is what makes cleanup complete rather than
     # partial (see docstring above).
     cells_empty_on_entry = [(r, c) for r in range(9) for c in range(9) if grid[r][c] == 0]
- 
+
     # Step 1: squeeze out all the free progress pure deduction can give us.
     solve_naked_singles(grid)
  
@@ -376,10 +418,25 @@ def solve(grid, randomize=False):
         grid[row][col] = guess
         iteration_count += 1
 
+        if max_iterations is not None:
+            _counter[0] += 1
+            if _counter[0] >= max_iterations:
+                # Budget exhausted -- give up on this branch (and,
+                # since every ancestor call will hit this same check on
+                # its own very next guess, the whole search) rather
+                # than run unbounded. See max_iterations in the
+                # docstring above for why this is treated the same as
+                # "no solution".
+                for row, col in cells_empty_on_entry:
+                    grid[row][col] = 0
+                return False, iteration_count
+
         # Recurse: "assuming this guess is correct, can the rest of the
         # puzzle be solved?" This is the branching point -- everything
         # from here down happens inside this nested call.
-        solved, sub_iterations = solve(grid, randomize=randomize)
+        solved, sub_iterations = solve(
+            grid, randomize=randomize, max_iterations=max_iterations, _counter=_counter
+        )
         iteration_count += sub_iterations
         if solved:
             return True, iteration_count  # this branch worked -- propagate success upward
