@@ -9,10 +9,13 @@ Two screens, shown one after another in the same window:
    square blank (no need to type 0 anywhere). Each digit is validated
    against its row/column/box, same as guessing on screen 2. A "Use
    Sample Puzzle" button skips straight to the built-in sample_puzzle
-   instead, a "Paste Puzzle" button reads a puzzle off the system
-   clipboard and fills the grid with it, and a "Create New" button
-   clears the grid so you can start typing a fresh puzzle.
- 
+   instead, a "Paste Puzzle" button loads a single saved-puzzle record
+   (see Sudoku_Save.txt below) off the system clipboard and jumps
+   straight to the solving screen with it, a "Generate Puzzle" button
+   creates a brand-new randomly generated puzzle at a chosen
+   difficulty, and a "Create New" button clears the grid so you can
+   start typing a fresh puzzle.
+
 2. SudokuGUI -- the solving screen. Whatever puzzle came out of
    screen 1 appears here with those clues locked (shown in a
    different color) and every other cell open for your own guesses.
@@ -21,9 +24,14 @@ Two screens, shown one after another in the same window:
    row/column tracking sets from sudoku_solver.py's build_tracking_sets().
    A "Solve" button runs the full solver (naked singles + backtracking)
    and fills in everything beyond what you've entered. A "Reset"
-   button clears your guesses back to the original puzzle's clues.
+   button clears your guesses back to the original puzzle's clues. A
+   "Save to File" button appends the current grid to Sudoku_Save.txt as
+   a record "Paste Puzzle" (above) can later load back in. Ctrl+Z undoes
+   your most recent guess, one step at a time, while this screen is showing.
 """
- 
+
+import os
+import sys
 import tkinter as tk
 from tkinter import messagebox
 from sudoku_solver import (
@@ -35,8 +43,20 @@ from sudoku_solver import (
     rate_difficulty,
 )
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 HELP_LAST_UPDATED = "September 2, 2026"
+
+SAVE_FILE_NAME = "Sudoku_Save.txt"
+
+# Sudoku_Save.txt stores only a difficulty LETTER per record, not the
+# original backtracking-guess count -- so Paste Puzzle (see
+# PuzzleEntryGUI._on_paste) can't recover the exact original number,
+# only which of the three tiers the puzzle falls into. These are
+# representative reiteration_count values chosen so that
+# sudoku_solver.rate_difficulty() maps each one straight back to the
+# matching tier: 0 is Easy's defining value, 1 is Moderate's lowest,
+# 40 is Hard's lowest.
+DIFFICULTY_LETTER_TO_REITERATION_COUNT = {"E": 0, "M": 1, "H": 40}
 
 ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
 
@@ -67,16 +87,9 @@ that row, column, or box is rejected with a beep. Then either:
     point where the game switches into guessing mode), or
   * Click "Use Sample Puzzle" to skip straight to the built-in
     sample puzzle instead, ignoring anything you typed, or
-  * Click "Paste Puzzle" to read a full puzzle off your system
-    clipboard instead of typing every clue by hand -- this fills
-    the grid exactly as if you'd typed it, but you still click
-    "Start Solving" afterward. Copy the puzzle as either 81
-    characters in a row or as 9 lines of 9 characters, using 0 or
-    . for blank cells, before clicking this button. Only
-    text-based clipboard content is supported -- copying an
-    image or screenshot of a puzzle is NOT supported and will
-    not be read correctly, so make sure you copy the puzzle as
-    plain text, not a picture, or
+  * Click "Paste Puzzle" to load a puzzle you previously saved to
+    Sudoku_Save.txt off the system clipboard -- see PASTING A
+    SAVED PUZZLE below, or
   * Pick a difficulty (Easy, Moderate, or Hard) and click
     "Generate Puzzle" to create a brand new puzzle instead of
     typing or pasting one -- see GENERATING A NEW PUZZLE below, or
@@ -100,6 +113,19 @@ several internal attempts -- a "Generating puzzle..." message
 lets you know it's working. Once generation finishes, you're
 taken straight to the solving screen with the new puzzle loaded,
 same as clicking "Use Sample Puzzle."
+
+PASTING A SAVED PUZZLE
+"Paste Puzzle" loads a puzzle you saved earlier with "Save to File"
+(see SAVING YOUR PUZZLE TO A FILE below). Open Sudoku_Save.txt,
+copy exactly ONE line/record, then click "Paste Puzzle" on this
+entry screen. If the clipboard holds a valid record, you're taken
+straight to the solving screen with that puzzle loaded and ready
+to solve -- its saved difficulty level (Easy/Moderate/Hard) comes
+along with it, so the solving screen's difficulty label is correct
+immediately, without needing to re-solve the puzzle first. If the
+clipboard doesn't hold a single valid record (wrong length, stray
+characters, more than one line copied, etc.), an error message
+explains this and nothing on screen changes.
 
 SELECTING A CELL
 Click on any empty (white) cell to select it. The cell turns
@@ -138,56 +164,101 @@ changed -- these are the numbers the puzzle began with. Every
 other cell is yours to fill in and stays editable until the
 puzzle is solved.
 
+UNDO (CTRL+Z)
+While on the solving screen, pressing Ctrl+Z undoes your most
+recent entry, one step at a time -- each press steps back one more
+guess, however many you've made. It has no effect once there's
+nothing left to undo (no error, nothing happens), and it only
+works on the solving screen: it has no effect back on the puzzle
+entry screen. This is separate from Save/Reset below -- Ctrl+Z
+tracks every entry automatically as you make it, while Save/Reset
+are manual snapshots you take yourself.
+
+SAVING YOUR PUZZLE TO A FILE
+"Save to File" appends the current grid (givens plus whatever
+you've typed in so far) as a new record to a file named
+Sudoku_Save.txt, created in the same folder as the app itself.
+Every click adds ANOTHER record -- it never overwrites what's
+already in the file, so saves from different sessions all pile up
+as separate lines. Each record is 82 characters: 81 characters for
+the grid itself (row by row, 9 characters per row, each one either
+the digit 1-9 for a filled cell or 0 for an empty cell), followed
+by one final letter giving the puzzle's difficulty -- E for Easy,
+M for Moderate, or H for Hard. See PASTING A SAVED PUZZLE above for
+how to load a record back in.
+
 THE BUTTONS
-  Save      -- Takes a snapshot backup of the grid exactly as it
-               looks right now (givens plus whatever you've typed
-               in so far). You can save as many times as you like;
-               each Save adds another backup.
-  Solve     -- Runs the full solver and fills in every remaining
-               empty cell to complete the puzzle.
-  Reset     -- Restores the most recently saved backup. If you've
-               never clicked Save, this instead clears the grid
-               back to the original puzzle's clues.
-  Help      -- Opens this help window.
-  New/Clear -- After asking you to confirm, discards the current
-               puzzle and every saved backup and takes you back to
-               the blank puzzle entry screen described above, so
-               you can start over with a brand new puzzle.
+  Save         -- Takes a snapshot backup of the grid exactly as it
+                  looks right now (givens plus whatever you've typed
+                  in so far). You can save as many times as you like;
+                  each Save adds another backup. This is an in-memory
+                  backup only -- it's lost when the app closes; see
+                  Save to File below for a backup that persists.
+  Save to File -- Appends the current grid to Sudoku_Save.txt as a
+                  new record -- see SAVING YOUR PUZZLE TO A FILE above.
+  Solve        -- Runs the full solver and fills in every remaining
+                  empty cell to complete the puzzle.
+  Reset        -- Restores the most recently saved backup. If you've
+                  never clicked Save, this instead clears the grid
+                  back to the original puzzle's clues.
+  Help         -- Opens this help window.
+  New/Clear    -- After asking you to confirm, discards the current
+                  puzzle and every saved backup and takes you back to
+                  the blank puzzle entry screen described above, so
+                  you can start over with a brand new puzzle.
 """
 
 
-def _parse_clipboard_puzzle(text):
+def _app_directory():
     """
-    Tries to turn clipboard text into a 9x9 grid of ints (0 = blank),
-    supporting the two formats people actually copy Sudoku puzzles in:
-    81 characters in a row, or 9 lines of 9 characters each (spaces or
-    stray grid-line characters like "|", "-", "+" are ignored). Returns
-    None if nothing usable could be found.
+    Directory Sudoku_Save.txt is read from and appended to: the folder
+    containing the running script, OR -- when PyInstaller has packaged
+    this into a onefile .exe -- the folder containing that .exe itself.
+    sys.frozen is the flag PyInstaller sets on a packaged build; without
+    checking it, __file__ inside a frozen build would resolve to
+    PyInstaller's internal temp extraction folder instead of wherever
+    the person actually put the .exe, which isn't what "the same folder
+    as the running script/exe" means from the person's point of view.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _parse_save_record(text):
+    """
+    Validates and parses a single Sudoku_Save.txt record (see
+    SudokuGUI._on_save_to_file for how these get written): exactly 82
+    characters -- 81 grid digits (0-9, row by row, 9 per row) followed
+    by one difficulty letter, E/M/H. A single trailing newline (as every
+    line in the file has) is tolerated. Anything else -- wrong length,
+    non-digit grid characters, more than one line, an unrecognized
+    difficulty letter -- is rejected.
+
+    Returns (grid, difficulty_letter) on success, or (None, None) if
+    text isn't exactly one valid record.
     """
     if not text:
-        return None
+        return None, None
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) == 9:
-        cleaned_lines = [
-            "".join(ch for ch in line if ch in "0123456789.") for line in lines
-        ]
-        if all(len(line) == 9 for line in cleaned_lines):
-            return _digits_to_grid("".join(cleaned_lines))
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None, None
+    record = lines[0].strip()
 
-    cleaned = "".join(ch for ch in text if ch in "0123456789.")
-    return _digits_to_grid(cleaned)
+    if len(record) != 82:
+        return None, None
 
+    grid_digits, difficulty_letter = record[:81], record[81]
+    if not grid_digits.isdigit():
+        return None, None
+    if difficulty_letter not in DIFFICULTY_LETTER_TO_REITERATION_COUNT:
+        return None, None
 
-def _digits_to_grid(cleaned):
-    """Turns an 81-character string of digits/"." (blank) into a 9x9
-    grid of ints, or None unless cleaned is exactly 81 characters."""
-    if len(cleaned) != 81:
-        return None
     grid = [[0] * 9 for _ in range(9)]
-    for i, ch in enumerate(cleaned):
-        grid[i // 9][i % 9] = 0 if ch == "." else int(ch)
-    return grid
+    for i, ch in enumerate(grid_digits):
+        grid[i // 9][i % 9] = int(ch)
+    return grid, difficulty_letter
 
 
 def _clear_window(root):
@@ -277,6 +348,16 @@ class SudokuGUI:
         self.col_labels = []
         self.backup_stack = []  # each entry: a full 9x9 grid snapshot,
                                  # saved via the Save button, most recent last
+        self.undo_stack = []  # each entry: a full 9x9 grid snapshot taken
+                               # from just BEFORE a successful guess -- see
+                               # _push_undo_snapshot/_on_undo. Deliberately
+                               # separate from backup_stack above: this one
+                               # is filled automatically on every guess,
+                               # rather than only when Save is clicked.
+        self.last_known_grid = None  # the grid as of the last successful
+                                      # guess (or, before any guesses, the
+                                      # grid _build_grid() just built) --
+                                      # see _push_undo_snapshot
         self.selected_cell = None  # (row, col) of the cell currently
                                     # highlighted for candidate-picking, or
                                     # None if nothing is selected
@@ -288,10 +369,12 @@ class SudokuGUI:
         self._build_difficulty_label()
         self._build_title()
         self._build_grid()
+        self.last_known_grid = self._read_grid()
         self._build_side_labels()
         self._build_buttons()
         self._build_candidate_area()
         self._update_candidates()
+        self._bind_undo()
 
     def _build_difficulty_label(self):
         """Displays a small-font "Difficulty Level: ..." line directly
@@ -408,18 +491,21 @@ class SudokuGUI:
         tk.Button(button_frame, text="Save", command=self._on_save).grid(
             row=0, column=0, padx=5
         )
+        tk.Button(
+            button_frame, text="Save to File", command=self._on_save_to_file
+        ).grid(row=0, column=1, padx=5)
         tk.Button(button_frame, text="Solve", command=self._on_solve).grid(
-            row=0, column=1, padx=5
-        )
-        tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
             row=0, column=2, padx=5
         )
-        tk.Button(button_frame, text="Help", command=self._on_help).grid(
+        tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
             row=0, column=3, padx=5
+        )
+        tk.Button(button_frame, text="Help", command=self._on_help).grid(
+            row=0, column=4, padx=5
         )
         tk.Button(
             button_frame, text="New/Clear", command=self._on_new_clear
-        ).grid(row=0, column=4, padx=5)
+        ).grid(row=0, column=5, padx=5)
 
         self.status_label = tk.Label(
             self.root, text=ENTRY_HINT_TEXT, font=("Arial", 10)
@@ -524,6 +610,7 @@ class SudokuGUI:
             # from the candidate buttons: drop the highlight and clear
             # whatever candidate buttons were on screen.
             self._clear_selection()
+            self._push_undo_snapshot()
 
         self._update_candidates()
         self._check_grid_completion()
@@ -594,6 +681,7 @@ class SudokuGUI:
         entry.insert(0, str(digit))
 
         self._clear_selection()
+        self._push_undo_snapshot()
         self._update_candidates()
         self._check_grid_completion()
 
@@ -697,7 +785,39 @@ class SudokuGUI:
         grid = self._read_grid()
         self.backup_stack.append(grid)
         self._update_backup_label()
- 
+
+    def _on_save_to_file(self):
+        """
+        Appends the current grid (givens plus whatever guesses have
+        been typed in) as one new record to Sudoku_Save.txt, in the
+        same folder as the running script/exe (see _app_directory()).
+        Each record is 82 characters: 81 grid characters (row by row,
+        '1'-'9' for a filled cell or '0' for empty), followed by one
+        difficulty letter -- E/M/H for Easy/Moderate/Hard, reusing
+        self.reiteration_count's already-computed rating (the same
+        value _build_difficulty_label() displays) rather than
+        recalculating it. Appending -- never overwriting -- means
+        multiple saves accumulate as separate lines; PuzzleEntryGUI's
+        "Paste Puzzle" (_on_paste) expects to load exactly one such
+        line at a time off the clipboard.
+        """
+        self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
+
+        grid = self._read_grid()
+        record = "".join(str(grid[r][c]) for r in range(9) for c in range(9))
+        record += rate_difficulty(self.reiteration_count)[0]  # E/M/H
+
+        path = os.path.join(_app_directory(), SAVE_FILE_NAME)
+        try:
+            with open(path, "a", encoding="utf-8") as save_file:
+                save_file.write(record + "\n")
+        except OSError as err:
+            self.status_label.config(text=f"Could not save to file: {err}", fg="red")
+            return
+
+        self.status_label.config(text=f"Saved to {SAVE_FILE_NAME}.", fg="green")
+
     def _update_backup_label(self):
         """Refreshes the '<N> screen backup(s)' message to match
         however many snapshots are currently on the stack."""
@@ -721,7 +841,54 @@ class SudokuGUI:
                 val = grid[r][c]
                 if val != 0:
                     entry.insert(0, str(val))
- 
+
+    def _bind_undo(self):
+        """Binds Ctrl+Z to _on_undo on root. Bound fresh every time a
+        SudokuGUI is constructed (see __init__) so it's only ever active
+        while THIS screen is the one showing -- _on_new_clear() unbinds
+        it again before tearing this screen down, so Ctrl+Z has no
+        effect back on PuzzleEntryGUI."""
+        self.root.bind("<Control-z>", self._on_undo)
+
+    def _unbind_undo(self):
+        """Removes the Ctrl+Z binding _bind_undo() set up. Called from
+        _on_new_clear() before switching back to PuzzleEntryGUI."""
+        self.root.unbind("<Control-z>")
+
+    def _push_undo_snapshot(self):
+        """
+        Called whenever a guessed (non-given) cell is successfully
+        filled with a valid digit -- by typing (_on_cell_edit) or by
+        clicking a candidate button (_on_candidate_click). Pushes
+        self.last_known_grid -- the grid as it looked just BEFORE this
+        fill, captured after the previous successful fill (or, for the
+        very first fill, right after this screen was built) -- onto
+        undo_stack, then advances last_known_grid to the grid as it
+        looks now, ready to be pushed by the NEXT fill.
+        """
+        self.undo_stack.append(self.last_known_grid)
+        self.last_known_grid = self._read_grid()
+
+    def _on_undo(self, event=None):
+        """
+        Ctrl+Z handler (see _bind_undo). Pops the most recent snapshot
+        off undo_stack and restores the grid to it via
+        _apply_grid_to_entries -- the same restore logic Reset uses. A
+        no-op if there's nothing left to undo: no error, no popup,
+        Ctrl+Z simply has no effect.
+        """
+        if not self.undo_stack:
+            return
+
+        grid = self.undo_stack.pop()
+        self._clear_selection()
+        self._clear_reiteration_count()
+        self._clear_multiple_solutions_message()
+        self._apply_grid_to_entries(grid)
+        self.last_known_grid = grid
+        self._update_candidates()
+        self.status_label.config(text="Undid last entry.", fg="blue")
+
     def _on_solve(self):
         """Runs the full solver on the current grid (givens + any
         guesses typed in) and fills every remaining cell with the
@@ -741,13 +908,20 @@ class SudokuGUI:
                     entry.config(state="disabled", disabledforeground="blue")
             self.status_label.config(text="Solved!", fg="green")
             self._show_reiteration_count()
+            # The solved grid didn't arrive via the tracked "guess"
+            # path _push_undo_snapshot() watches, so the undo history
+            # built up before this Solve no longer applies to what's on
+            # screen now -- clear it rather than leave it pointing at a
+            # stale sequence of prior grids.
+            self.undo_stack = []
+            self.last_known_grid = self._read_grid()
         else:
             self.status_label.config(
                 text="No solution exists for the current entries.", fg="red"
             )
- 
+
         self._update_candidates()
- 
+
     def _on_reset(self):
         """
         Restores the grid to the MOST RECENTLY saved backup, removing
@@ -776,7 +950,12 @@ class SudokuGUI:
             self.status_label.config(
                 text="No backups saved -- cleared to puzzle.", fg="red"
             )
- 
+
+        # Same reasoning as _on_solve(): the grid just changed via a
+        # path _push_undo_snapshot() doesn't watch, so any undo history
+        # from before this Reset no longer applies.
+        self.undo_stack = []
+        self.last_known_grid = self._read_grid()
         self._update_candidates()
 
     def _on_help(self):
@@ -803,6 +982,10 @@ class SudokuGUI:
         )
         if not confirmed:
             return
+
+        # Ctrl+Z must have no effect once we're off this screen -- see
+        # _bind_undo/_unbind_undo.
+        self._unbind_undo()
 
         puzzle, reiteration_count, solution = _run_puzzle_entry_screen(self.root)
         if puzzle is None:
@@ -1052,26 +1235,36 @@ class PuzzleEntryGUI:
 
     def _on_paste(self):
         """
-        Reads whatever's on the system clipboard and, if it parses as
-        a full puzzle, fills this entry screen's grid with it -- same
-        end state as typing every clue in by hand, just without doing
-        it one cell at a time. Unlike "Use Sample Puzzle", this does
-        NOT move on to the solving screen by itself: "Start Solving"
-        and its minimum-clue check still apply afterward, exactly as
-        if the puzzle had been typed in manually.
+        Reads the system clipboard and validates it as a single
+        Sudoku_Save.txt record (see SudokuGUI._on_save_to_file): exactly
+        82 characters -- 81 grid digits (0-9, row by row) followed by
+        one difficulty letter, E/M/H. Anything else (wrong length,
+        invalid characters, more than one line) is rejected with an
+        error message and nothing on screen changes.
+
+        On a valid record, this fills the entry grid AND proceeds
+        straight to the solving screen -- same as "Use Sample Puzzle" --
+        carrying the saved difficulty letter forward as
+        self.reiteration_count (via DIFFICULTY_LETTER_TO_REITERATION_COUNT)
+        so SudokuGUI's difficulty label shows the puzzle's saved rating
+        without recalculating it. self.solution still needs solve(),
+        though -- SudokuGUI's "Multiple Solutions" check depends on
+        having the actual solved grid, which the save-file format
+        doesn't store.
         """
         try:
             clipboard_text = self.root.clipboard_get()
         except tk.TclError:
             clipboard_text = None
 
-        grid = _parse_clipboard_puzzle(clipboard_text)
+        grid, difficulty_letter = _parse_save_record(clipboard_text)
         if grid is None:
             messagebox.showerror(
                 "Could Not Read Puzzle",
-                "Could not read a valid puzzle from the clipboard. Copy "
-                "a puzzle as 81 digits or 9 rows of 9 digits (use 0 or . "
-                "for blanks) and try again.",
+                "The clipboard doesn't contain a valid saved puzzle "
+                "record. Copy a single line from Sudoku_Save.txt (81 "
+                "grid digits followed by one difficulty letter -- E, M, "
+                "or H) and try again.",
             )
             return
 
@@ -1079,6 +1272,15 @@ class PuzzleEntryGUI:
             entry.delete(0, tk.END)
             if grid[r][c] != 0:
                 entry.insert(0, str(grid[r][c]))
+
+        self.result = grid
+        solution_grid = [row[:] for row in grid]
+        solve(solution_grid)
+        self.solution = solution_grid
+        self.reiteration_count = DIFFICULTY_LETTER_TO_REITERATION_COUNT[
+            difficulty_letter
+        ]
+        self.root.quit()
 
     def _on_create_new(self):
         """
