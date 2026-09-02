@@ -4,7 +4,7 @@ A Sudoku puzzle solver with a graphical interface, built in Python using tkinter
 
 ## Current version
 
-**v1.4.0** (from `__version__` in `sudoku_gui.py`)
+**v1.4.1** (from `__version__` in `sudoku_gui.py`)
 
 ## Features
 

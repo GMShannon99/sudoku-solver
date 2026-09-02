@@ -43,7 +43,7 @@ from sudoku_solver import (
     rate_difficulty,
 )
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 HELP_LAST_UPDATED = "September 2, 2026"
 
 SAVE_FILE_NAME = "Sudoku_Save.txt"
