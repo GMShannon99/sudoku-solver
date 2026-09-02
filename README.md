@@ -75,6 +75,8 @@ Re-run after any code change to produce an updated `.exe`. Note that `venv\Scrip
 - `build/` — PyInstaller's intermediate build files.
 - `Sudoku_Save.txt` — created at runtime (not checked into git) the first time "Save to File" is used; see [Saved puzzle file format](#saved-puzzle-file-format) above.
 
+> Note: every button in `sudoku_gui.py` has a docstring on its click handler explaining exactly what it does (including side effects like what gets saved, restored, or cleared) plus a short inline comment at the `tk.Button(...)` call itself, so the button's purpose is clear both when reading the handler and when scanning the layout code.
+
 ## Versioning
 
 Version numbers are bumped manually, following semantic versioning (MAJOR.MINOR.PATCH). Each version bump should ideally correspond to a git commit describing the change.
