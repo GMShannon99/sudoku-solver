@@ -788,12 +788,20 @@ class SudokuGUI:
 
     def _on_save_to_file(self):
         """
-        Appends the current grid (givens plus whatever guesses have
-        been typed in) as one new record to Sudoku_Save.txt, in the
-        same folder as the running script/exe (see _app_directory()).
+        Appends the puzzle's ORIGINAL GIVEN CLUES -- self.puzzle, as
+        passed into this screen's constructor -- as one new record to
+        Sudoku_Save.txt, in the same folder as the running script/exe
+        (see _app_directory()). Deliberately reads self.puzzle here,
+        NOT self._read_grid(): self.puzzle never changes after this
+        screen is built (see __init__), so it always holds exactly the
+        givens with every other cell at 0, regardless of whatever the
+        person has since typed in or the Solve button has filled in --
+        _read_grid() would capture that live solving progress instead,
+        which isn't what a saved puzzle record should represent.
+
         Each record is 82 characters: 81 grid characters (row by row,
-        '1'-'9' for a filled cell or '0' for empty), followed by one
-        difficulty letter -- E/M/H for Easy/Moderate/Hard, reusing
+        '1'-'9' for a given clue or '0' for every other cell), followed
+        by one difficulty letter -- E/M/H for Easy/Moderate/Hard, reusing
         self.reiteration_count's already-computed rating (the same
         value _build_difficulty_label() displays) rather than
         recalculating it. Appending -- never overwriting -- means
@@ -804,8 +812,7 @@ class SudokuGUI:
         self._clear_reiteration_count()
         self._clear_multiple_solutions_message()
 
-        grid = self._read_grid()
-        record = "".join(str(grid[r][c]) for r in range(9) for c in range(9))
+        record = "".join(str(self.puzzle[r][c]) for r in range(9) for c in range(9))
         record += rate_difficulty(self.reiteration_count)[0]  # E/M/H
 
         path = os.path.join(_app_directory(), SAVE_FILE_NAME)
