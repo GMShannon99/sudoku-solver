@@ -48,14 +48,6 @@ HELP_LAST_UPDATED = "September 2, 2026"
 
 SAVE_FILE_NAME = "Sudoku_Save.txt"
 
-# The trailing character in a Sudoku_Save.txt record is DOCUMENTATION
-# ONLY -- PuzzleEntryGUI._on_paste independently re-validates every
-# pasted puzzle by actually solving it, and uses solve()'s real results
-# for the difficulty label, ignoring whatever this character says. A
-# record is still structurally valid, though, only if this character is
-# one of these: E/M/H, or a single space meaning "not recorded."
-VALID_DIFFICULTY_CHARACTERS = {"E", "M", "H", " "}
-
 # Caps how many backtracking guesses PuzzleEntryGUI._on_paste's
 # validate-by-solving check will spend on a pasted puzzle before giving
 # up and treating it as invalid -- see solve()'s max_iterations for why
@@ -235,47 +227,52 @@ def _app_directory():
 
 def _parse_save_record(text):
     """
-    Validates and parses a single Sudoku_Save.txt record (see
-    SudokuGUI._on_save_to_file for how these get written): exactly 82
-    characters -- 81 grid digits (0-9, row by row, 9 per row) followed
-    by one difficulty character, which may be E, M, H, or a single
-    space (meaning "not recorded" -- see VALID_DIFFICULTY_CHARACTERS).
-    A single trailing newline (as every line in the file has) is
-    tolerated. Anything else -- wrong length, non-digit grid
-    characters, more than one line, an unrecognized difficulty
-    character -- is rejected.
+    Validates and parses a single pasted puzzle record: 81 grid digits
+    (0-9, row by row, 9 per row), OPTIONALLY followed by one more
+    character in position 82. A single trailing newline (as every line
+    in Sudoku_Save.txt has) is tolerated; more than one line of actual
+    content is rejected.
+
+    That optional 82nd character -- the difficulty letter
+    SudokuGUI._on_save_to_file writes (E/M/H) -- is NOT validated here
+    at all, and its value is completely ignored: it's purely
+    informational, since PuzzleEntryGUI._on_paste independently
+    re-validates and re-rates every pasted puzzle by actually solving
+    it. Any character in that position is accepted, including a space
+    or something else entirely, and a record with no 82nd character at
+    all (exactly 81 characters) is equally valid.
+
+    Rejected only if:
+      * the length isn't exactly 81 or 82 characters, or
+      * any of the first 81 characters isn't a digit 0-9.
 
     Note this deliberately does NOT call .strip() on the chosen line:
-    doing so would silently eat a legitimate trailing-space difficulty
-    character, which is exactly the case this function needs to accept
-    rather than reject.
+    stripping happens to be harmless now that position 82 isn't
+    validated, but avoiding it keeps length-checking exact rather than
+    dependent on whatever whitespace .strip() would remove.
 
-    Returns (grid, difficulty_character) on success, or (None, None) if
-    text isn't exactly one valid record. difficulty_character is
-    documentation only -- see PuzzleEntryGUI._on_paste, which
-    independently re-validates and re-rates the puzzle by solving it.
+    Returns the parsed 9x9 grid on success, or None if text isn't
+    exactly one valid record.
     """
     if not text:
-        return None, None
+        return None
 
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) != 1:
-        return None, None
+        return None
     record = lines[0]
 
-    if len(record) != 82:
-        return None, None
+    if len(record) not in (81, 82):
+        return None
 
-    grid_digits, difficulty_character = record[:81], record[81]
+    grid_digits = record[:81]
     if not grid_digits.isdigit():
-        return None, None
-    if difficulty_character not in VALID_DIFFICULTY_CHARACTERS:
-        return None, None
+        return None
 
     grid = [[0] * 9 for _ in range(9)]
     for i, ch in enumerate(grid_digits):
         grid[i // 9][i % 9] = int(ch)
-    return grid, difficulty_character
+    return grid
 
 
 def _clear_window(root):
@@ -1275,19 +1272,20 @@ class PuzzleEntryGUI:
 
     def _on_paste(self):
         """
-        Reads the system clipboard and validates it STRUCTURALLY as a
-        single Sudoku_Save.txt record (see SudokuGUI._on_save_to_file):
-        exactly 82 characters -- 81 grid digits (0-9, row by row)
-        followed by one difficulty character, which may be E, M, H, or
-        a single space. Anything else (wrong length, invalid
-        characters, more than one line) is rejected immediately with an
-        error dialog and nothing on screen changes.
+        Reads the system clipboard and validates it STRUCTURALLY (see
+        _parse_save_record): 81 grid digits (0-9, row by row), with an
+        OPTIONAL 82nd character that's accepted no matter what it is --
+        length must be exactly 81 or 82 characters, and only the first
+        81 characters are actually checked. Anything else (wrong
+        length, a non-digit among the first 81 characters, more than
+        one line) is rejected immediately with an error dialog and
+        nothing on screen changes.
 
-        That trailing character is documentation only, though --
-        deliberately NOT trusted as the puzzle's actual difficulty (see
-        VALID_DIFFICULTY_CHARACTERS). Once the record parses, this
-        independently re-validates the puzzle itself by actually
-        running solve() on it:
+        That optional 82nd character is documentation only, and never
+        validated -- deliberately NOT trusted as the puzzle's actual
+        difficulty. Once the record parses, this independently
+        re-validates the puzzle itself by actually running solve() on
+        it:
           * If solve() finds no solution (the puzzle is corrupted,
             contradictory, or was hand-edited into an invalid state),
             nothing is loaded into the grid and nothing proceeds to the
@@ -1321,14 +1319,14 @@ class PuzzleEntryGUI:
         except tk.TclError:
             clipboard_text = None
 
-        grid, _difficulty_character = _parse_save_record(clipboard_text)
+        grid = _parse_save_record(clipboard_text)
         if grid is None:
             messagebox.showerror(
                 "Could Not Read Puzzle",
                 "The clipboard doesn't contain a valid saved puzzle "
-                "record. Copy a single line from Sudoku_Save.txt (81 "
-                "grid digits followed by one difficulty character -- "
-                "E, M, H, or a blank space) and try again.",
+                "record. Copy a single line of 81 grid digits (0-9), "
+                "optionally followed by one more character, and try "
+                "again.",
             )
             return
 
