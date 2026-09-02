@@ -324,6 +324,8 @@ def _show_help_window(root):
     text_widget.insert("1.0", HELP_TEXT)
     text_widget.config(state="disabled")
 
+    # Close -- destroys this Toplevel only; the screen that opened it is
+    # untouched.
     tk.Button(
         doc_window,
         text="Close",
@@ -502,21 +504,31 @@ class SudokuGUI:
         button_frame = tk.Frame(self.root)
         button_frame.grid(row=3, column=0, pady=10)
 
+        # Save -- push a backup snapshot of the current grid; see _on_save.
         tk.Button(button_frame, text="Save", command=self._on_save).grid(
             row=0, column=0, padx=5
         )
+        # Save to File -- append the puzzle's givens to Sudoku_Save.txt;
+        # see _on_save_to_file.
         tk.Button(
             button_frame, text="Save to File", command=self._on_save_to_file
         ).grid(row=0, column=1, padx=5)
+        # Solve -- run the full solver and fill in every remaining cell;
+        # see _on_solve.
         tk.Button(button_frame, text="Solve", command=self._on_solve).grid(
             row=0, column=2, padx=5
         )
+        # Reset -- restore the last Save backup, or clear to the puzzle's
+        # givens if none exists; see _on_reset.
         tk.Button(button_frame, text="Reset", command=self._on_reset).grid(
             row=0, column=3, padx=5
         )
+        # Help -- open the shared "How This App Works" window; see _on_help.
         tk.Button(button_frame, text="Help", command=self._on_help).grid(
             row=0, column=4, padx=5
         )
+        # New/Clear -- confirm, then discard the puzzle and all backups and
+        # return to the blank entry screen; see _on_new_clear.
         tk.Button(
             button_frame, text="New/Clear", command=self._on_new_clear
         ).grid(row=0, column=5, padx=5)
@@ -667,6 +679,8 @@ class SudokuGUI:
         the lower-right candidate_frame."""
         self._clear_candidate_buttons()
         for i, digit in enumerate(self._valid_candidates(row, col)):
+            # One button per legal digit for the selected cell -- clicking
+            # it fills that digit in; see _on_candidate_click.
             btn = tk.Button(
                 self.candidate_frame,
                 text=str(digit),
@@ -945,12 +959,31 @@ class SudokuGUI:
 
     def _on_reset(self):
         """
-        Restores the grid to the MOST RECENTLY saved backup, removing
-        that backup from the stack and decrementing the on-screen
-        backup count by 1. If no backups have been saved yet, there's
-        nothing to restore TO, so this falls back to the original
-        behavior: clearing every guess back to just the puzzle's
-        original givens.
+        Handles the "Reset" button. Behavior depends on whether
+        self.backup_stack (filled by the Save button, see _on_save) has
+        anything in it:
+
+          * BACKUP EXISTS: pops the MOST RECENTLY saved backup off
+            backup_stack and writes it into every guessed (non-given)
+            cell via _apply_grid_to_entries, overwriting whatever is
+            currently on screen. That backup is then gone -- popping
+            removes it from the stack -- and the on-screen "<N> screen
+            backup(s)" count drops by 1 to match. Given cells are never
+            touched either way. Status message: "Restored last saved
+            backup."
+
+          * NO BACKUP EXISTS (backup_stack is empty, i.e. Save was never
+            clicked, or every saved backup has already been popped by a
+            prior Reset): there's nothing to restore TO, so instead this
+            clears every guessed cell back to blank, leaving only the
+            puzzle's original givens -- the same result as if the puzzle
+            had just been loaded. Status message: "No backups saved --
+            cleared to puzzle."
+
+        Either way, this also discards the undo history (see the
+        undo_stack reset below) and refreshes the row/column missing-
+        digit labels, since the grid just changed via a path
+        _push_undo_snapshot() doesn't watch.
         """
         self._clear_selection()
         self._clear_reiteration_count()
@@ -980,6 +1013,12 @@ class SudokuGUI:
         self._update_candidates()
 
     def _on_help(self):
+        """Opens the shared "How This App Works" window (see
+        _show_help_window) in a separate Toplevel, leaving this solving
+        screen untouched underneath it. Clears any lingering
+        "Reiterations: N" / "Multiple Solutions" message first, same as
+        every other button on this screen, so it can't still be showing
+        once Help is closed and this screen becomes visible again."""
         self._clear_reiteration_count()
         self._clear_multiple_solutions_message()
         _show_help_window(self.root)
@@ -1090,21 +1129,32 @@ class PuzzleEntryGUI:
         button_frame = tk.Frame(self.root)
         button_frame.grid(row=2, column=0, pady=10)
  
+        # Start Solving -- lock in whatever's typed as the givens and move
+        # to the solving screen; see _on_start.
         tk.Button(button_frame, text="Start Solving", command=self._on_start).grid(
             row=0, column=0, padx=5
         )
+        # Use Sample Puzzle -- ignore anything typed and load the built-in
+        # sample_puzzle instead; see _on_sample.
         tk.Button(
             button_frame, text="Use Sample Puzzle", command=self._on_sample
         ).grid(row=0, column=1, padx=5)
+        # Paste Puzzle -- load a saved-puzzle record off the clipboard; see
+        # _on_paste.
         tk.Button(
             button_frame, text="Paste Puzzle", command=self._on_paste
         ).grid(row=0, column=2, padx=5)
+        # Create New -- blank this entry screen to start typing a fresh
+        # puzzle; see _on_create_new.
         tk.Button(
             button_frame, text="Create New", command=self._on_create_new
         ).grid(row=0, column=3, padx=5)
+        # Generate Puzzle -- create a brand-new random puzzle at the
+        # selected difficulty; see _on_generate.
         tk.Button(
             button_frame, text="Generate Puzzle", command=self._on_generate
         ).grid(row=0, column=4, padx=5)
+        # Help -- open the shared "How This App Works" window; see _on_help.
         tk.Button(button_frame, text="Help", command=self._on_help).grid(
             row=0, column=5, padx=5
         )
@@ -1199,6 +1249,23 @@ class PuzzleEntryGUI:
         return grid
  
     def _on_start(self):
+        """
+        Handles the "Start Solving" button. Reads whatever clues were
+        typed into this entry screen and, provided at least 6 squares are
+        filled, locks them in as the puzzle's givens and moves to the
+        solving screen with them -- this is the point where the game
+        switches from typing clues to guessing. If 5 or fewer squares are
+        filled, a warning dialog blocks the move and the person stays on
+        this screen to add more clues; nothing is lost either way, since
+        whatever was already typed remains in the grid.
+
+        Also silently solves a COPY of the entered grid in the background
+        (never touching what's displayed) purely to compute
+        self.reiteration_count and self.solution -- both handed to
+        SudokuGUI so its difficulty label is correct immediately and it
+        can detect multiple-solution puzzles, without re-solving from
+        scratch on the next screen.
+        """
         self._clear_paste_error()
         grid = self._read_grid()
         filled_count = sum(1 for row in grid for value in row if value != 0)
@@ -1220,6 +1287,18 @@ class PuzzleEntryGUI:
         self.root.quit()  # ends THIS mainloop() call; window stays open
 
     def _on_sample(self):
+        """
+        Handles the "Use Sample Puzzle" button. Discards anything typed
+        into this entry screen -- it's never read -- and instead loads
+        the built-in sample_puzzle constant as the puzzle's givens,
+        skipping straight to the solving screen with it. The minimum-
+        clues check _on_start() does doesn't apply here since
+        sample_puzzle is always a valid, complete-enough puzzle.
+
+        Also silently solves a copy of sample_puzzle in the background,
+        same as _on_start, to compute self.reiteration_count and
+        self.solution for SudokuGUI to use.
+        """
         self._clear_paste_error()
         # A shallow copy per row, so editing this grid later never
         # touches the original sample_puzzle constant.
@@ -1366,6 +1445,11 @@ class PuzzleEntryGUI:
         self.title_label.config(text="Sudoku - Manual Enter Mode")
 
     def _on_help(self):
+        """Opens the shared "How This App Works" window (see
+        _show_help_window) in a separate Toplevel, leaving this entry
+        screen untouched underneath it. Clears any lingering red "Pasted
+        puzzle is not valid." message first, same as every other button
+        on this screen, so it can't still be showing once Help is closed."""
         self._clear_paste_error()
         _show_help_window(self.root)
 
