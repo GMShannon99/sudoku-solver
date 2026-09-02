@@ -9,8 +9,9 @@ Two screens, shown one after another in the same window:
    square blank (no need to type 0 anywhere). Each digit is validated
    against its row/column/box, same as guessing on screen 2. A "Use
    Sample Puzzle" button skips straight to the built-in sample_puzzle
-   instead, and a "Create New" button clears the grid so you can start
-   typing a fresh puzzle.
+   instead, a "Paste Puzzle" button reads a puzzle off the system
+   clipboard and fills the grid with it, and a "Create New" button
+   clears the grid so you can start typing a fresh puzzle.
  
 2. SudokuGUI -- the solving screen. Whatever puzzle came out of
    screen 1 appears here with those clues locked (shown in a
@@ -25,13 +26,23 @@ Two screens, shown one after another in the same window:
  
 import tkinter as tk
 from tkinter import messagebox
-from sudoku_solver import sample_puzzle, build_tracking_sets, solve, box_index
+from sudoku_solver import (
+    sample_puzzle,
+    build_tracking_sets,
+    solve,
+    box_index,
+    generate_puzzle,
+    rate_difficulty,
+)
 
-__version__ = "1.2.3"
+__version__ = "1.3.0"
+HELP_LAST_UPDATED = "September 2, 2026"
 
 ENTRY_HINT_TEXT = "Type a digit into any square you want filled."
 
-HELP_TEXT = """\
+HELP_TEXT = f"""\
+Version {__version__} -- Last updated: {HELP_LAST_UPDATED}
+
 Author: Gil Shannon
 Email: gmshannon99@gmail.com
 Note: Any comments, questions, or bug reports can be sent to the email
@@ -56,9 +67,39 @@ that row, column, or box is rejected with a beep. Then either:
     point where the game switches into guessing mode), or
   * Click "Use Sample Puzzle" to skip straight to the built-in
     sample puzzle instead, ignoring anything you typed, or
+  * Click "Paste Puzzle" to read a full puzzle off your system
+    clipboard instead of typing every clue by hand -- this fills
+    the grid exactly as if you'd typed it, but you still click
+    "Start Solving" afterward. Copy the puzzle as either 81
+    characters in a row or as 9 lines of 9 characters, using 0 or
+    . for blank cells, before clicking this button. Only
+    text-based clipboard content is supported -- copying an
+    image or screenshot of a puzzle is NOT supported and will
+    not be read correctly, so make sure you copy the puzzle as
+    plain text, not a picture, or
+  * Pick a difficulty (Easy, Moderate, or Hard) and click
+    "Generate Puzzle" to create a brand new puzzle instead of
+    typing or pasting one -- see GENERATING A NEW PUZZLE below, or
   * Click "Create New" to clear every square on this entry
     screen and start manually typing a brand new puzzle to be
     solved.
+
+GENERATING A NEW PUZZLE
+On the puzzle entry screen, next to "Use Sample Puzzle," a set of
+difficulty radio buttons (Easy, Moderate, Hard) and a "Generate
+Puzzle" button let you create a brand-new, randomly generated
+puzzle instead of typing or pasting one in. Pick whichever
+difficulty you want first, then click "Generate Puzzle" -- if you
+click it without picking a difficulty, it defaults to Moderate
+and generates anyway rather than making you choose. Every
+generated puzzle is guaranteed to have exactly one valid
+solution, the same guarantee a hand-typed or pasted puzzle only
+gets once you've confirmed it yourself. Generating can take a
+moment, since finding a puzzle at the right difficulty may need
+several internal attempts -- a "Generating puzzle..." message
+lets you know it's working. Once generation finishes, you're
+taken straight to the solving screen with the new puzzle loaded,
+same as clicking "Use Sample Puzzle."
 
 SELECTING A CELL
 Click on any empty (white) cell to select it. The cell turns
@@ -113,6 +154,40 @@ THE BUTTONS
                the blank puzzle entry screen described above, so
                you can start over with a brand new puzzle.
 """
+
+
+def _parse_clipboard_puzzle(text):
+    """
+    Tries to turn clipboard text into a 9x9 grid of ints (0 = blank),
+    supporting the two formats people actually copy Sudoku puzzles in:
+    81 characters in a row, or 9 lines of 9 characters each (spaces or
+    stray grid-line characters like "|", "-", "+" are ignored). Returns
+    None if nothing usable could be found.
+    """
+    if not text:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) == 9:
+        cleaned_lines = [
+            "".join(ch for ch in line if ch in "0123456789.") for line in lines
+        ]
+        if all(len(line) == 9 for line in cleaned_lines):
+            return _digits_to_grid("".join(cleaned_lines))
+
+    cleaned = "".join(ch for ch in text if ch in "0123456789.")
+    return _digits_to_grid(cleaned)
+
+
+def _digits_to_grid(cleaned):
+    """Turns an 81-character string of digits/"." (blank) into a 9x9
+    grid of ints, or None unless cleaned is exactly 81 characters."""
+    if len(cleaned) != 81:
+        return None
+    grid = [[0] * 9 for _ in range(9)]
+    for i, ch in enumerate(cleaned):
+        grid[i // 9][i % 9] = 0 if ch == "." else int(ch)
+    return grid
 
 
 def _clear_window(root):
@@ -228,16 +303,13 @@ class SudokuGUI:
           0 guesses      -> Easy
           1-39 guesses   -> Moderate
           40+ guesses    -> Hard
-        Lives directly in root's grid (same as title_label) so it gets
-        torn down along with everything else on New/Clear's
-        _clear_window() call, and recomputed fresh the next time a
-        puzzle is started."""
-        if self.reiteration_count == 0:
-            difficulty = "Easy"
-        elif self.reiteration_count < 40:
-            difficulty = "Moderate"
-        else:
-            difficulty = "Hard"
+        (see sudoku_solver.rate_difficulty, the single source of truth
+        for these thresholds -- generate_puzzle() uses the exact same
+        function to rate a generated puzzle's difficulty). Lives
+        directly in root's grid (same as title_label) so it gets torn
+        down along with everything else on New/Clear's _clear_window()
+        call, and recomputed fresh the next time a puzzle is started."""
+        difficulty = rate_difficulty(self.reiteration_count)
 
         difficulty_label = tk.Label(
             self.root, text=f"Difficulty Level: {difficulty}", font=("Arial", 10)
@@ -245,11 +317,10 @@ class SudokuGUI:
         difficulty_label.grid(row=0, column=0, pady=(10, 0))
 
     def _build_title(self):
-        """Displays the puzzle name with a name credit to its right,
-        e.g. 'Sudoku Solver - By Gil Shannon', directly below the
+        """Displays the puzzle name, directly below the
         difficulty label at the top of the window, above the grid."""
         title_label = tk.Label(
-            self.root, text=f"Sudoku Solver v{__version__} - By Gil Shannon", font=("Arial", 14, "bold")
+            self.root, text=f"Sudoku Solver v{__version__}", font=("Arial", 14, "bold")
         )
         title_label.grid(row=1, column=0, pady=(0, 0))
  
@@ -455,27 +526,7 @@ class SudokuGUI:
             self._clear_selection()
 
         self._update_candidates()
-
-        # The person may have just typed the LAST remaining digit, or
-        # may have just edited a cell that was previously part of a full
-        # grid -- either way, re-check fullness fresh every time so a
-        # stale "Multiple Solutions" message never lingers once the grid
-        # stops being fully filled.
-        self._clear_multiple_solutions_message()
-        grid = self._read_grid()
-        if all(grid[r][c] != 0 for r in range(9) for c in range(9)):
-            # Validation above already guarantees any filled grid is a
-            # legally completed one (every digit that landed passed the
-            # row/column/box check) -- but a legal completion isn't
-            # necessarily THE solution the solver found for this puzzle.
-            # Compare against it: a match means this is the puzzle's
-            # (unique) solution, so run the exact same logic the Solve
-            # button runs. A mismatch means the puzzle has more than one
-            # valid solution.
-            if grid == self.solution:
-                self._on_solve()
-            else:
-                self._show_multiple_solutions_message()
+        self._check_grid_completion()
 
     def _valid_candidates(self, row, col):
         """
@@ -544,6 +595,7 @@ class SudokuGUI:
 
         self._clear_selection()
         self._update_candidates()
+        self._check_grid_completion()
 
     def _clear_selection(self):
         """Un-highlights the currently selected cell (if any) and
@@ -589,6 +641,32 @@ class SudokuGUI:
         for c in range(9):
             digits = "\n".join(str(d) for d in sorted(col_missing[c]))
             self.col_labels[c].config(text=digits if digits else "\u2713")
+
+    def _check_grid_completion(self):
+        """
+        Re-checks fullness fresh every time this is called -- from
+        BOTH cell-fill paths, typing (_on_cell_edit) and clicking a
+        candidate button (_on_candidate_click) -- so a stale "Multiple
+        Solutions" message never lingers once the grid stops being
+        fully filled, and so filling the last cell either way is
+        actually detected.
+
+        Validation upstream of both call sites already guarantees any
+        filled grid is a legally completed one (every digit that
+        landed passed the row/column/box check) -- but a legal
+        completion isn't necessarily THE solution the solver found for
+        this puzzle. Compare against it: a match means this is the
+        puzzle's (unique) solution, so run the exact same logic the
+        Solve button runs. A mismatch means the puzzle has more than
+        one valid solution.
+        """
+        self._clear_multiple_solutions_message()
+        grid = self._read_grid()
+        if all(grid[r][c] != 0 for r in range(9) for c in range(9)):
+            if grid == self.solution:
+                self._on_solve()
+            else:
+                self._show_multiple_solutions_message()
 
     def _show_multiple_solutions_message(self):
         """Displays 'Multiple Solutions' in the lower-right corner
@@ -762,18 +840,22 @@ class PuzzleEntryGUI:
                                # self.result, also computed silently in
                                # _on_start/_on_sample -- SudokuGUI compares
                                # against this to detect multiple solutions
+        self.difficulty_var = tk.StringVar(value="")  # "" until the
+                                                        # person picks a
+                                                        # Generate Puzzle
+                                                        # radio button --
+                                                        # see _on_generate
 
         self._build_title()
         self._build_grid()
         self._build_buttons()
  
     def _build_title(self):
-        """Displays the puzzle name with a name credit to its right,
-        e.g. 'Enter Your Puzzle v1.2.1 - By Gil Shannon', at the top
+        """Displays the puzzle name, at the top
         of the window above the grid."""
         self.title_label = tk.Label(
             self.root,
-            text=f"Enter Your Puzzle v{__version__} - By Gil Shannon",
+            text=f"Enter Your Puzzle v{__version__}",
             font=("Arial", 14, "bold"),
         )
         self.title_label.grid(row=0, column=0, pady=(10, 0))
@@ -811,19 +893,42 @@ class PuzzleEntryGUI:
             button_frame, text="Use Sample Puzzle", command=self._on_sample
         ).grid(row=0, column=1, padx=5)
         tk.Button(
-            button_frame, text="Create New", command=self._on_create_new
+            button_frame, text="Paste Puzzle", command=self._on_paste
         ).grid(row=0, column=2, padx=5)
+        tk.Button(
+            button_frame, text="Create New", command=self._on_create_new
+        ).grid(row=0, column=3, padx=5)
+        tk.Button(
+            button_frame, text="Generate Puzzle", command=self._on_generate
+        ).grid(row=0, column=4, padx=5)
         tk.Button(button_frame, text="Help", command=self._on_help).grid(
-            row=0, column=3, padx=5
+            row=0, column=5, padx=5
         )
+
+        # Difficulty picker for "Generate Puzzle" above -- deliberately
+        # starts with NO radio button selected (difficulty_var's default
+        # is ""); _on_generate treats an empty selection as "Moderate"
+        # rather than blocking the click, so picking one is optional.
+        difficulty_frame = tk.Frame(self.root)
+        difficulty_frame.grid(row=3, column=0)
+        tk.Label(
+            difficulty_frame, text="Generate difficulty:", font=("Arial", 10)
+        ).grid(row=0, column=0, padx=(0, 5))
+        for i, level in enumerate(("Easy", "Moderate", "Hard")):
+            tk.Radiobutton(
+                difficulty_frame,
+                text=level,
+                variable=self.difficulty_var,
+                value=level,
+            ).grid(row=0, column=i + 1, padx=3)
 
         self.hint_label = tk.Label(
             self.root,
             text=ENTRY_HINT_TEXT,
             font=("Arial", 10),
         )
-        self.hint_label.grid(row=3, column=0)
- 
+        self.hint_label.grid(row=4, column=0)
+
     def _on_cell_edit(self, row, col):
         """
         Narrows whatever was typed down to a single digit 1-9 (no 0's
@@ -908,6 +1013,72 @@ class PuzzleEntryGUI:
         _, self.reiteration_count = solve(solution_grid)
         self.solution = solution_grid
         self.root.quit()
+
+    def _on_generate(self):
+        """
+        Reads the selected difficulty radio button -- defaulting to
+        "Moderate" if none is picked, rather than blocking the click --
+        and generates a brand-new puzzle at that difficulty via
+        sudoku_solver.generate_puzzle(), then proceeds exactly like
+        _on_sample() above: sets self.result and moves on to the
+        solving screen. The minimum-clues check _on_start() does isn't
+        needed here since a generated puzzle always has enough clues
+        by construction.
+
+        generate_puzzle() already computes both the backtracking-guess
+        count AND the fully-solved grid for whatever puzzle it returns,
+        so those are reused directly here instead of calling solve()
+        again on the result.
+
+        Shows a brief "Generating puzzle..." message first and forces
+        it to actually paint (via update_idletasks) before the
+        generation call blocks the UI -- generation can take a moment,
+        since landing on the requested difficulty may take several
+        internal attempts (see generate_puzzle's docstring).
+        """
+        target_difficulty = self.difficulty_var.get() or "Moderate"
+
+        self.hint_label.config(text="Generating puzzle...", fg="black")
+        self.root.update_idletasks()
+
+        puzzle, reiteration_count, _actual_difficulty, solution = generate_puzzle(
+            target_difficulty
+        )
+
+        self.result = puzzle
+        self.reiteration_count = reiteration_count
+        self.solution = solution
+        self.root.quit()
+
+    def _on_paste(self):
+        """
+        Reads whatever's on the system clipboard and, if it parses as
+        a full puzzle, fills this entry screen's grid with it -- same
+        end state as typing every clue in by hand, just without doing
+        it one cell at a time. Unlike "Use Sample Puzzle", this does
+        NOT move on to the solving screen by itself: "Start Solving"
+        and its minimum-clue check still apply afterward, exactly as
+        if the puzzle had been typed in manually.
+        """
+        try:
+            clipboard_text = self.root.clipboard_get()
+        except tk.TclError:
+            clipboard_text = None
+
+        grid = _parse_clipboard_puzzle(clipboard_text)
+        if grid is None:
+            messagebox.showerror(
+                "Could Not Read Puzzle",
+                "Could not read a valid puzzle from the clipboard. Copy "
+                "a puzzle as 81 digits or 9 rows of 9 digits (use 0 or . "
+                "for blanks) and try again.",
+            )
+            return
+
+        for (r, c), entry in self.entries.items():
+            entry.delete(0, tk.END)
+            if grid[r][c] != 0:
+                entry.insert(0, str(grid[r][c]))
 
     def _on_create_new(self):
         """

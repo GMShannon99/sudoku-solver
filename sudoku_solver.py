@@ -29,6 +29,8 @@ Overview of the approach used in this file:
    branch, and a failed branch pops back out to try the next option.
 """
  
+import random
+
 # A famous "world's hardest sudoku"-style puzzle (only 21 givens).
 # Naked singles alone will NOT fully solve this one -- every empty cell
 # still has 2+ candidates after propagation stalls out. That's exactly
@@ -227,7 +229,7 @@ def solve_naked_singles(grid):
     return total_placed, row_missing, col_missing, box_missing
  
  
-def solve(grid):
+def solve(grid, randomize=False):
     """
     Fully solves grid in place, combining naked-singles propagation
     with MRV-guided recursive backtracking. Returns a tuple
@@ -241,6 +243,18 @@ def solve(grid):
                           singles never increment this -- they require
                           no guessing -- so a puzzle solvable by naked
                           singles alone always reports 0.
+      randomize        -- if True, each guessed cell's candidates are
+                          tried in shuffled order instead of the
+                          default sorted order. Solving BEHAVIOR is
+                          identical either way (every candidate still
+                          gets tried until one works) -- this only
+                          affects WHICH valid solution gets found first
+                          when a puzzle has more than one, which is why
+                          generate_puzzle() below turns it on when
+                          producing a fresh solved grid, while every
+                          other caller (the GUI, the terminal entry
+                          point) leaves it off and keeps getting
+                          deterministic results.
 
     --- High-level recursive strategy ---
  
@@ -349,14 +363,23 @@ def solve(grid):
     # entire call tree, including nested calls' own guesses.
     iteration_count = 0
 
-    for guess in candidates[(row, col)]:
+    guesses = candidates[(row, col)]
+    if randomize:
+        # Copy before shuffling -- candidates[(row, col)] is the list
+        # living inside the snapshot dict built above; shuffling it in
+        # place would be harmless here, but copying keeps this function
+        # from ever mutating a structure it didn't itself allocate.
+        guesses = guesses[:]
+        random.shuffle(guesses)
+
+    for guess in guesses:
         grid[row][col] = guess
         iteration_count += 1
 
         # Recurse: "assuming this guess is correct, can the rest of the
         # puzzle be solved?" This is the branching point -- everything
         # from here down happens inside this nested call.
-        solved, sub_iterations = solve(grid)
+        solved, sub_iterations = solve(grid, randomize=randomize)
         iteration_count += sub_iterations
         if solved:
             return True, iteration_count  # this branch worked -- propagate success upward
@@ -375,6 +398,245 @@ def solve(grid):
     for row, col in cells_empty_on_entry:
         grid[row][col] = 0
     return False, iteration_count
+
+
+def _count_solutions(grid, limit):
+    """
+    Counts how many distinct solutions exist for grid, mutating it
+    in place, stopping early the moment `limit` distinct solutions
+    have been found (has_unique_solution() below only ever needs to
+    tell "exactly one" apart from "more than one", so it calls this
+    with limit=2 and never pays for exploring a puzzle's full solution
+    space once a second solution proves it isn't unique).
+
+    Mirrors solve()'s naked-singles + MRV backtracking structure, with
+    one key difference: solve() stops and returns at the FIRST solution
+    it finds, leaving the grid filled with it. This function instead
+    keeps going after each solution, to see whether a DIFFERENT one
+    also exists -- so every branch (successful or not) must undo its
+    own fills before returning, including a successful one, so sibling
+    branches always resume from a clean grid.
+    """
+    cells_empty_on_entry = [(r, c) for r in range(9) for c in range(9) if grid[r][c] == 0]
+
+    solve_naked_singles(grid)
+    row_missing, col_missing, box_missing = build_tracking_sets(grid)
+    candidates = build_candidates(grid, row_missing, col_missing, box_missing)
+
+    if any(len(options) == 0 for options in candidates.values()):
+        found = 0  # contradiction -- this branch has zero solutions
+    elif not candidates:
+        found = 1  # no empty cells left -- this branch IS a solution
+    else:
+        row, col = min(candidates, key=lambda cell: len(candidates[cell]))
+        found = 0
+        for guess in candidates[(row, col)]:
+            grid[row][col] = guess
+            found += _count_solutions(grid, limit - found)
+            if found >= limit:
+                break
+
+    # Undo this call's own fills (naked singles plus, if we branched,
+    # whatever guess is still sitting in the loop variable's cell) so
+    # the caller -- whether that's a sibling guess at this same level or
+    # the top-level count_solutions() -- always sees a clean grid.
+    for r, c in cells_empty_on_entry:
+        grid[r][c] = 0
+    return found
+
+
+def count_solutions(grid, limit=2):
+    """
+    Counts distinct solutions for grid (a partial or full 9x9 grid),
+    capped at `limit`, WITHOUT mutating the caller's grid (works on a
+    scratch copy internally). This is the general-purpose "how many
+    solutions does this puzzle actually have" primitive that
+    has_unique_solution() and generate_puzzle() below both rely on.
+    """
+    work = [row[:] for row in grid]
+    return _count_solutions(work, limit)
+
+
+def has_unique_solution(grid):
+    """
+    True if grid has EXACTLY one solution. This is the real uniqueness
+    check generate_puzzle() uses to decide whether a cell can safely be
+    removed without the puzzle becoming ambiguous.
+
+    Note for anyone comparing this to SudokuGUI's "Multiple Solutions"
+    message: that message is a lighter-weight, comparison-based check
+    (it only notices multiple solutions if the person happens to
+    manually complete the grid differently than solve() did) -- it
+    isn't a standalone function that could be imported and reused
+    as-is for a partially-filled puzzle. This function is the genuine,
+    reusable "does this puzzle have one solution" primitive; it's new,
+    built specifically so generation has a real uniqueness check to
+    call rather than duplicating ad hoc logic.
+    """
+    return count_solutions(grid, limit=2) == 1
+
+
+# Same thresholds already used by SudokuGUI's difficulty label:
+# 0 backtracking guesses -> Easy, 1-39 -> Moderate, 40+ -> Hard.
+DIFFICULTY_RANK = {"Easy": 0, "Moderate": 1, "Hard": 2}
+
+
+def rate_difficulty(reiteration_count):
+    """
+    Converts a solve() iteration_count into "Easy"/"Moderate"/"Hard",
+    using the same thresholds SudokuGUI's difficulty label has always
+    used. Pulled out as its own function so that label and
+    generate_puzzle() below can't drift out of sync with each other.
+    """
+    if reiteration_count == 0:
+        return "Easy"
+    elif reiteration_count < 40:
+        return "Moderate"
+    else:
+        return "Hard"
+
+
+def generate_puzzle(target_difficulty, max_attempts=10, extra_removal_attempts=20):
+    """
+    Generates a brand-new, randomly generated 9x9 puzzle (0 = blank
+    cell) aimed at target_difficulty ("Easy", "Moderate", or "Hard"),
+    guaranteed to have exactly one valid solution.
+
+    Returns (puzzle, reiteration_count, actual_difficulty, solution):
+      puzzle            -- the generated 9x9 grid.
+      reiteration_count -- the backtracking-guess count solve() needed
+                          for this exact puzzle -- the same metric
+                          SudokuGUI's difficulty label is driven by.
+                          Callers should reuse this value directly
+                          (e.g. passing it straight to SudokuGUI)
+                          rather than calling solve() again to
+                          recompute it.
+      actual_difficulty -- "Easy"/"Moderate"/"Hard" rating of the
+                          returned puzzle (see rate_difficulty). Only
+                          guaranteed to equal target_difficulty if an
+                          attempt actually landed on it within the
+                          attempt cap below -- otherwise this is
+                          whichever attempt came closest, so a caller
+                          can tell the two apart if it cares to.
+      solution          -- the puzzle's unique fully-solved grid. Also
+                          free to reuse directly instead of solving
+                          the puzzle a second time.
+
+    --- How this works ---
+
+    a. Solve a completely empty grid with randomize=True, so repeated
+       calls don't always produce the same solved grid.
+    b. Remove cells one at a time in random order. Each removal is
+       checked TWICE before being kept: has_unique_solution() must
+       still hold (otherwise that digit goes back and a different
+       cell is tried), AND rate_difficulty() of the resulting puzzle
+       must not exceed target_difficulty (otherwise that digit ALSO
+       goes back -- see below for why this second check matters).
+       This continues until every cell has been tried once.
+    c. The second check above is what makes hitting an EASY target
+       possible at all: a puzzle stripped down to the minimum clues
+       that still give a unique solution is, in practice, almost never
+       solvable by naked singles alone (an early version of this
+       function did exactly that -- minimize first, check difficulty
+       after -- and it could never land on Easy, since minimal-clue
+       puzzles overshot it every time). Capping every single removal
+       at target_difficulty means the puzzle can never overshoot in
+       the first place: for an Easy target, only removals that keep
+       the puzzle solvable with zero backtracking guesses are kept; for
+       a Hard target, the cap never actually limits anything, since
+       nothing rates higher than Hard.
+    d. If the capped pass above still leaves the puzzle EASIER than
+       requested (e.g. every remaining clue's removal was tried at
+       some point, but each one was tried against a different puzzle
+       state than a second sweep would see), retry additional random
+       sweeps over whatever clues remain, same capped rule, up to
+       extra_removal_attempts total removal attempts, stopping early
+       once the target is reached or a full sweep makes no progress.
+    e. Attempts repeat, each from a fresh solved grid, until one lands
+       exactly on target_difficulty or max_attempts is reached -- at
+       which point the closest attempt seen so far is returned instead
+       of hanging indefinitely.
+    """
+    if target_difficulty not in DIFFICULTY_RANK:
+        target_difficulty = "Moderate"
+    target_rank = DIFFICULTY_RANK[target_difficulty]
+
+    best = None  # (puzzle, reiteration_count, difficulty, solution)
+    best_distance = None
+
+    for _attempt in range(max_attempts):
+        solved_grid = [[0] * 9 for _ in range(9)]
+        solve(solved_grid, randomize=True)
+
+        puzzle = [row[:] for row in solved_grid]
+        reiteration_count = 0
+        difficulty = "Easy"  # a fully solved grid trivially needs 0 guesses
+
+        def _try_remove(r, c):
+            """Attempts to remove puzzle[r][c], keeping the removal only
+            if uniqueness survives AND the resulting difficulty doesn't
+            exceed target_difficulty. Returns True (and updates the
+            enclosing reiteration_count/difficulty) if the removal was
+            kept, False if it was reverted."""
+            nonlocal reiteration_count, difficulty
+            removed = puzzle[r][c]
+            puzzle[r][c] = 0
+            if not has_unique_solution(puzzle):
+                puzzle[r][c] = removed
+                return False
+
+            check_grid = [row[:] for row in puzzle]
+            _, candidate_count = solve(check_grid)
+            candidate_difficulty = rate_difficulty(candidate_count)
+            if DIFFICULTY_RANK[candidate_difficulty] > target_rank:
+                puzzle[r][c] = removed
+                return False
+
+            reiteration_count, difficulty = candidate_count, candidate_difficulty
+            return True
+
+        # b/c. First pass: try removing every cell once, in random
+        # order, capped at target_difficulty (see docstring above).
+        removal_order = [(r, c) for r in range(9) for c in range(9)]
+        random.shuffle(removal_order)
+        for r, c in removal_order:
+            _try_remove(r, c)
+
+        # d. Still easier than requested -- retry further random sweeps
+        # over the remaining clues, since a different order can unlock
+        # removals the first pass's order happened to rule out.
+        extra_tries = 0
+        while (
+            DIFFICULTY_RANK[difficulty] < target_rank
+            and extra_tries < extra_removal_attempts
+        ):
+            leftover = [(r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0]
+            random.shuffle(leftover)
+            progressed = False
+            for r, c in leftover:
+                if (
+                    extra_tries >= extra_removal_attempts
+                    or DIFFICULTY_RANK[difficulty] >= target_rank
+                ):
+                    break
+                extra_tries += 1
+                if _try_remove(r, c):
+                    progressed = True
+            if not progressed:
+                break  # a full sweep changed nothing -- no point retrying
+
+        distance = abs(DIFFICULTY_RANK[difficulty] - target_rank)
+        if best is None or distance < best_distance:
+            best = (puzzle, reiteration_count, difficulty, solved_grid)
+            best_distance = distance
+
+        if difficulty == target_difficulty:
+            return puzzle, reiteration_count, difficulty, solved_grid
+
+        # Still not on target after both passes above: restart from a
+        # fresh solved grid on the next loop iteration instead.
+
+    return best
 
 
 def parse_puzzle_rows(rows):
